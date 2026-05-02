@@ -16,7 +16,9 @@ Roxygen: list(markdown = TRUE)
 RoxygenNote: 7.1.0
 Depends: 
     Biobase,
-    extraChIPs
+    BiocFileCache,
+    extraChIPs,
+    tidyverse
 Suggests: 
     knitr,
     rmarkdown,
