@@ -1,0 +1,163 @@
+---
+title: "Workshop Demonstrating extraChIPs"
+author: Stevie Pederson^[Black Ochre Data Labs, The Kids Research Institute Australia stevie.pederson@thekids.org.au]
+bibliography: ../inst/references.bib
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{An Example Workshop}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+
+```{r, include = FALSE}
+knitr::opts_chunk$set(
+  collapse = TRUE,
+  comment = "#>"
+)
+```
+
+# The package extraChIPs
+
+## Overview
+
+### Description
+
+This is a 90 minute workshop written for EuroBioc26 and a Bioconductor Workflow under active development.
+The primary aim is to enable analysis of ChIP-Seq data, and has been developed with this specific data type in mind.
+However, the principles can plausibly be extended to ATAC-Seq data, with a clear caveat around the counting of alignments, which may require more care for ATAC-Seq.
+
+Two different ChIP targets (ER$\alpha$ and H3K27ac) will be analysed using complementary strategies, then a data integration stage performed, highlighting the true capabilities of `r BiocStyle::Biocpkg("extraChIPs")`.
+Both ChIP targets were prepared in the ZR-75-1 breast cancer cell line under control conditions (Estrogen; E2) then supplemented by *dihydrotestosterone* (E2+DHT).
+Raw data is available at https://www.ncbi.nlm.nih.gov/Traces/study/?acc=PRJNA509779&o=acc_s%3Aa with these samples pre-processed using the code at https://github.com/smped/PRJNA509779 [@Pederson-fd].
+
+The original publication containing the detailed biological background is at https://doi.org/10.1038/s41591-020-01168-7 [@Hickey2021-mz]
+
+### Pre-requisites
+
+List any workshop prerequisites, for example:
+
+* Basic knowledge of R syntax
+* Understanding of piping in `R` 
+* Familiarity with `ggplot2` and the wider `tidyverse`
+* Familiarity with the GenomicRanges and SummarizedExperiment classes
+
+<!-- List relevant background reading for the workshop, including any -->
+<!-- theoretical background you expect students to have. -->
+
+<!-- * List any textbooks, papers, or other reading that students should be -->
+<!--   familiar with. Include direct links where possible. -->
+
+### Participation
+
+<!-- Describe how students will be expected to participate in the workshop. -->
+
+### _R_ / _Bioconductor_ packages used
+
+Whilst the primary focus will be on the usage of `extraChIPs`, additional important packages being discussed will include:
+
+- `r BiocStyle::Biocpkg("qsmooth")` [@Hicks2018-uw]
+- `r BiocStyle::Biocpkg("quantro")` [@Hicks2015-ee]
+- `r BiocStyle::Biocpkg("plyranges")` [@Lee209-gb]
+<!-- - `r BiocStyle::Biocpkg("DiffBind")` and `r BiocStyle::Biocpkg("csaw")` -->
+
+```{r}
+library(extraChIPsWorkshop)
+library(rtracklayer)
+library(tidyverse)
+```
+
+
+### Time outline
+
+| Activity                       | Time |
+|--------------------------------|------|
+| Annotation Preparation         | 15m  |
+| Fixed-Width Peaks (ER$\alpha$) | 30m  |
+| Sliding Windows                | 30m  |
+| Integration of Datasets        | 15m  |
+
+### Workshop goals and objectives
+
+Today we will be analysing two ChIP-Seq datasets.
+All pre-processing has been performed, including read QC, deduplication, alignment to the genome and peak calling.
+This will have produced `.bam` files containing alignments and `.narrowPeak` files identifying the genomic regions identified as peaks by MACS2 [@Zhang2008-ms].
+
+### Learning goals
+
+* preparation of genomic region annotations for interpretation of ChIP-seq data
+* making informed decisions for normalisation
+* performing Differential Signal Analysis (DSA)
+* integration of two or more ChIP-seq targets
+
+### Learning objectives
+
+<!-- * analyze xyz data to produce... -->
+<!-- * create xyz plots -->
+<!-- * evaluate xyz data for artifacts -->
+
+## Workshop
+
+1. Annotation Preparation
+2. Differential Signal Analysis Using Fixed-Width Peaks
+3. Differential Signal Analysis Using Sliding Windows
+4. Integration of two or more ChIP targets
+
+# Annotation Preparation
+
+During sample preparation, a reference genome will have been selected and for today's dataset, reads were aligned to the hg19/GRCh37 reference genome.
+This will contain not only chromosome sequences, but a set of annotations will have been defined annotating genes, transcripts and exons.
+For today, we'll use those defined by [GENCODE version v44, lifted over to hg19](https://www.gencodegenes.org/human/release_44lift37.html), and which roughly corresponds to Ensembl Release 110.
+
+The genome information can usually be obtained from the header of any associated bam files, but as an initial introduction, `extraChIPs` can provide this easily and flexibly.
+The key data structure in the Bioconductor ecosystem for the information is a `Seqinfo` object.
+
+```{r sq}
+sq <- defineSeqinfo("GRCh37", chr = TRUE)
+sq
+```
+
+`defineSeqInfo()` is a quick and easy shortcut for defining a `Seqinfo` object, however no scaffolds or patches will be included, only the main chromosomes.
+By default the mitochondrial chromosome will also be omitted, although this can easily be added by passing the argument `mito = "M"` to include `chrM` in the output.
+The `chr` prefix is added by default and this can be omitted by passing `chr = FALSE`
+
+Next we might like to load our gene annotations.
+These have been provided in the directory `inst/extdata` and contain only the gene, transcript and exon-level annotations from the original gtf.
+After loading, add the seqinfo object to the returned GenomicRanges object to ensure all of our objects contain the identical genomic co-ordinates.
+
+```{r}
+f <- system.file(
+  'extdata', 'gencode.v44lift37.reduced.gtf.gz', package = "extraChIPsWorkshop"
+)
+gtf <- import.gff(f)
+seqinfo(gtf) <- sq
+gtf
+```
+
+Now we have genes annotated, we know where all transcripts begin and end.
+We can use `defineRegions()` to define promoters, upstream promoters, gene-bodies and intragenic regions.
+this will classify every base in the genome defined by the `Seqinfo` object into one of these features
+
+```{r}
+split_gtf <- split(gtf, gtf$type)
+regions <- defineRegions(
+  genes = split_gtf$gene, 
+  transcripts = split_gtf$transcript, 
+  exons = split_gtf$exon, 
+  intron = FALSE
+)
+names(regions)
+```
+
+We can compare our ChIP peaks to these regions and can also use them to map our peaks to genes.
+Every gene and transcript associated with a region has been included in the mcols element for every region.
+These won't be included for distal intergenic regions, but will still be included for the proximal intergenic regions
+
+```{r}
+regions$proximal_intergenic
+```
+
+
+
+
+# References

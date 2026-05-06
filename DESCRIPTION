@@ -13,16 +13,18 @@ License: MIT + file LICENSE
 Encoding: UTF-8
 LazyData: true
 Roxygen: list(markdown = TRUE)
-RoxygenNote: 7.1.0
+RoxygenNote: 7.3.3
 Depends: 
-    Biobase,
-    BiocFileCache,
-    extraChIPs,
-    tidyverse
+    extraChIPs
 Suggests: 
+    Biobase,
+    BiocStyle,
+    BiocFileCache,
     knitr,
+    pkgdown,
     rmarkdown,
-    pkgdown
+    rtracklayer,
+    tidyverse
 URL: https://smped.github.io/extraChIPsWorkshop/
 BugReports: https://github.com/smped/extraChIPsWorkshop/issues/new/choose
 VignetteBuilder: knitr
