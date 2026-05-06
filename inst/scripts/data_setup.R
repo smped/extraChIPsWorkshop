@@ -12,14 +12,17 @@
 #'
 #' These files contain a subset of data from the complete dataset
 #' from https://www.ncbi.nlm.nih.gov/Traces/study/?acc=PRJNA509779&o=acc_s%3Aa
-#' being processed at https://github.com/smped/PRJNA509779 then stripped back
-#' to chromosome 1 only. The original publication containing all relevant
+#' being processed at https://github.com/smped/PRJNA509779.
+#' The original publication containing all relevant
 #' biological background is at https://doi.org/10.1038/s41591-020-01168-7
 #'
 #' Two ChIP targets (ERa & H3K27ac) were used in ZR-75-1 cells under control
 #' conditions (E2), followed by the addition of dihydro testosterone (E2+DHT).
 #'
-#'
+#' Currently all files contain data for the complete genome but may need to be
+#' stripped back to a single chromosome for a lighter workshop.
+#' If possible, try using all data saved as counts instead of using the bam
+#' files.
 
 ## Use cached data to ensure it's only downloaded once
 library(BiocFileCache)
