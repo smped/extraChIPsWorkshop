@@ -21,6 +21,7 @@ Suggests:
     BiocStyle,
     BiocFileCache,
     knitr,
+    pander,
     pkgdown,
     rmarkdown,
     rtracklayer,
