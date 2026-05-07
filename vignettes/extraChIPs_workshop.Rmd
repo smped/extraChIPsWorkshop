@@ -13,7 +13,8 @@ vignette: >
 ```{r, include = FALSE}
 knitr::opts_chunk$set(
   collapse = TRUE,
-  comment = "#>"
+  comment = "#>",
+  message = FALSE, warning = FALSE
 )
 ```
 
@@ -61,10 +62,11 @@ Whilst the primary focus will be on the usage of `extraChIPs`, additional import
 - `r BiocStyle::Biocpkg("plyranges")` [@Lee209-gb]
 <!-- - `r BiocStyle::Biocpkg("DiffBind")` and `r BiocStyle::Biocpkg("csaw")` -->
 
-```{r}
+```{r load-packages}
+library(tidyverse)
 library(extraChIPsWorkshop)
 library(rtracklayer)
-library(tidyverse)
+theme_set(theme_bw())
 ```
 
 
@@ -109,6 +111,8 @@ During sample preparation, a reference genome will have been selected and for to
 This will contain not only chromosome sequences, but a set of annotations will have been defined annotating genes, transcripts and exons.
 For today, we'll use those defined by [GENCODE version v44, lifted over to hg19](https://www.gencodegenes.org/human/release_44lift37.html), and which roughly corresponds to Ensembl Release 110.
 
+## Defining the Correct Genome
+
 The genome information can usually be obtained from the header of any associated bam files, but as an initial introduction, `extraChIPs` can provide this easily and flexibly.
 The key data structure in the Bioconductor ecosystem for the information is a `Seqinfo` object.
 
@@ -121,13 +125,15 @@ sq
 By default the mitochondrial chromosome will also be omitted, although this can easily be added by passing the argument `mito = "M"` to include `chrM` in the output.
 The `chr` prefix is added by default and this can be omitted by passing `chr = FALSE`
 
+## Annotating Genomic Regions
+
 Next we might like to load our gene annotations.
 These have been provided in the directory `inst/extdata` and contain only the gene, transcript and exon-level annotations from the original gtf.
 After loading, add the seqinfo object to the returned GenomicRanges object to ensure all of our objects contain the identical genomic co-ordinates.
 
-```{r}
+```{r load-gtf}
 f <- system.file(
-  'extdata', 'gencode.v44lift37.reduced.gtf.gz', package = "extraChIPsWorkshop"
+  'extdata/annotation', 'gencode.v44lift37.reduced.gtf.gz', package = "extraChIPsWorkshop"
 )
 gtf <- import.gff(f)
 seqinfo(gtf) <- sq
@@ -136,9 +142,15 @@ gtf
 
 Now we have genes annotated, we know where all transcripts begin and end.
 We can use `defineRegions()` to define promoters, upstream promoters, gene-bodies and intragenic regions.
-this will classify every base in the genome defined by the `Seqinfo` object into one of these features
+this will classify every base in the genome defined by the `Seqinfo` object into one of these features.
 
-```{r}
+- By default, promoters are defined as 2500bp upstream & 500 bo downstream from any TSS, although this can easily be changed. 
+Overlapping promoters from multiple transcripts within a gene are merged into larger promoter regions.
+- Similarly upstream promoters are simply defined as being 5000bp upstream from a TSS, excluding the regions already defined as promoters.
+- Setting `intron = FALSE` will define any region within a gene, excluding promoter regions, as a gene body. If `intron = TRUE`, the intreagenic regions will be separated into introns and exons.
+
+
+```{r define-regions}
 split_gtf <- split(gtf, gtf$type)
 regions <- defineRegions(
   genes = split_gtf$gene, 
@@ -146,17 +158,143 @@ regions <- defineRegions(
   exons = split_gtf$exon, 
   intron = FALSE
 )
-names(regions)
 ```
 
-We can compare our ChIP peaks to these regions and can also use them to map our peaks to genes.
-Every gene and transcript associated with a region has been included in the mcols element for every region.
-These won't be included for distal intergenic regions, but will still be included for the proximal intergenic regions
+All genes and transcripts associated with a defined range in this object are saved in the mcols element.
+As an example, we might wish to find all regions where *SEC14L2* has been associated.
+
+```{r sec14l2}
+sec14l2 <- subset(gtf, type == "gene" & gene_name == "SEC14L2")
+subsetByOverlaps(regions$promoter, sec14l2)
+```
+
+Here we can see three distinct promoters overlapping *SEC14L2*, with two associated with the multiple *SEC14L2* transcripts, and the third associated with overlapping transcripts from other genes.
+
+## Loading a BlackList and a GreyList 
+
+Most genomes contain regions which are problematic for different data types and the ENCODE blacklists are commonly used in ChIP-Seq [@Amemiya2019-et] to exclude low-confidence regions.
+These are readily available from https://github.com/Boyle-Lab/Blacklist/ and the blacklist for hg19/GRCh37 has been included in the workflow package.
+
+```{r bl}
+bl <- system.file(
+  'extdata/annotation', 'hg19-blacklist.v2.bed.gz', package = "extraChIPsWorkshop"
+)
+```
+
+Similarly, each experiment will likely have low-confidence regions where the input sample can be considered as unreliable.
+Today they have been pre-pepared and provided, but the package `r BiocStyle::Biocpkg("GreyListChIP")` can be used for your own experiment by following the provided vignette.
+
+```{r gl}
+gl <- system.file(
+  'extdata/annotation', 'SRR8315192_greylist.bed', package = "extraChIPsWorkshop"
+)
+```
+
+Together, the blacklist and greylist provide a set of regions where any peaks should be excluded from analysis.
+We can use the standard `import.bed()` file from `rtracklayer` to import these, or use the convenience function `importPeaks()` provided by `extraChIPs`.
+
+```{r demo-import}
+c(bl, gl) %>% 
+  importPeaks(seqinfo = sq, type = "bed")
+```
+
+By including the seqinfo object, the consistent genomic definition will be added to each of these files, with the returned object being a `GRangesList`.
+In most cases we simply wish to define a set of ranges marked for exclusion and we can create this in a convenient piped command.
+
+```{r exclude-ranges}
+exclude_ranges <- c(bl, gl) %>% 
+  importPeaks(seqinfo = sq, type = "bed") %>% 
+  unlist() %>% 
+  GenomicRanges::reduce()
+```
+
+Note that `reduce()` was called directly from the `GenomicRanges` namespace. 
+This is to avoid conflicts with `reduce()` from `purrr` which is loaded by the `tidyverse`.
+Some people may prefer to use the `r BiocStyle::CRANpkg("conflicted")` package to resolve these conflicts.
+
+## Fixed Width Peaks
+
+Now that we've prepared the external data, we can move to the peaks we're actually interested in.
+The first set of peaks, we'll work with are associated with the Estrogen Receptor (ER$\alpha$) after immunoprecipitation, and have been prepared under two conditions, 1) control (media with estradiol, E2) and 2) DHT-treated (E2+DHT).
+The sample data frame can be formed as follows.
+
+```{r samples-er}
+treat_levels <- c("E2", "E2+DHT")
+samples_er <- tibble(
+  id = paste0("SRR831518", seq(0, 5)),
+  target = "ER",
+  treat = factor(rep(treat_levels, each = 3), levels = treat_levels),
+  file = paste0(id, "_peaks.narrowPeak"),
+  path = system.file("extdata/er_peaks", file, package = "extraChIPsWorkshop")
+)
+```
+
+The peaks have been prepared using `macs2` set to detect 'narrowPeaks' which produces files in `.narrowPeak` format.
+This effectively extends the `.bed` format with the addition of key metrics defining the confidence `macs2` has in each peak.
+The final column `peak` denoted the position within the provided range, where the peak signal is estimated to be.
+Let's just look at the first file
 
 ```{r}
-regions$proximal_intergenic
+importPeaks(samples_er$path[1])
 ```
 
+Here we can see peaks from a scaffold loaded first, which we haven't included in our `seqinfo` object.
+By including this object in the call to `importPeaks` any peaks outside the defined chromsomes will be excluded.
+This feature makes downstream data integration far simpler.
+
+We can also pass our combination of black- and grey-listed ranges to the argument `blacklist`, as well as using the default setting of sorting the peaks into genomic order (`sort = TRUE`).
+Finally, if importing `.narrowPeak` files we can optionally set the argument `centre = TRUE` which will recalculate the peak to being an absolute position, instead of being a relative position.
+
+```{r er-peaks}
+er_peaks <- importPeaks(
+  samples_er$path, blacklist = exclude_ranges, seqinfo = sq, centre = TRUE
+)
+names(er_peaks) <- str_remove_all(names(er_peaks), "_peaks.narrowPeak")
+er_peaks
+```
+
+Again, we have a `GRangesList` containing each sample.
+Let's explore our peaks, firstly by using `plotOverlaps()` to see how many peaks are shared between samples.
+Under the hood, this uses the package `r BiocStyle::CRANpkg("SimpleUpset")` to create UpSet plots.
+
+```{r plot-er-overlaps}
+treat_colours <- setNames(c("steelblue", "red3"), treat_levels)
+plotOverlaps(
+  er_peaks, 
+  sort_sets = "none", set_col = rep(treat_colours, each = 3), exp_sets = 0.25
+)
+```
+
+As we can see, there's a good number of peaks identified in every sample, then a mix of combinations with peaks identified in only one, two, three, four or five samples.
+Only one intersection seems to represent peaks identified exclusively in DHT treated samples.
+This illustrates our challenge nicely!
+We're not going to be looking for peaks where ER is absent/persent in either condition.
+Rather where going to try and find peaks where the *signal changes* after DHT treatment, i.e. Differential Signal Analysis
+
+We can also just inspect the features of each sample, starting with peak width across all samples.
+The convenience function `plotGrlCols()` enables us to plot a single column from each element of a `GRangesList` object.
+By default, the "width" will be shown so let's plot the `score` column.
+A dashed line will be drawn at the combined 10th percentile by default, as will the total number of ranges in each element, which in this use case, represents the number of peaks in each sample
+
+```{r plot-grl-score-box}
+plotGrlCol(er_peaks, var = "score") + scale_y_log10()
+```
+
+This is a standard `ggplot` object so it's easy to modify how we choose, like transforming the y-axis to be log~10~.
+
+The plots enables multiple geoms (`r pander::pander(formals(plotGrlCol)$geom)`).
+If we pass the samples data.frame (`df = samples_er`), and indicate which column matches the names of the `GRangesList` (`.id = "id"`), additional aesthetics, like `fill` can be added.
+Labels and horizontal lines can also be omitted if preferred, in any combination.
+
+```{r plot-grl-width-violin}
+er_peaks %>% 
+  plotGrlCol(
+    var = "width", geom = "violin", quantile.linetype = 1, quantiles = 0.5, 
+    .id = "id", df = samples_er, fill = "treat", q = 0.5, total_geom = "none"
+  ) +
+  scale_fill_manual(values = treat_colours) +
+  scale_y_log10()
+```
 
 
 
