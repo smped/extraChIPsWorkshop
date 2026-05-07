@@ -25,6 +25,7 @@ Suggests:
     pkgdown,
     rmarkdown,
     rtracklayer,
+    SimpleUpset,
     tidyverse
 URL: https://smped.github.io/extraChIPsWorkshop/
 BugReports: https://github.com/smped/extraChIPsWorkshop/issues/new/choose
