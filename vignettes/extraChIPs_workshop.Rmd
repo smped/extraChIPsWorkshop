@@ -382,7 +382,7 @@ consensus_peaks <- er_peaks %>%
 Again, we can use `plotOverlaps()` to identify peaks unique to either condition, or shared between the two.
 Given there are only two elements to the input `GRangesList`, a VennDiagram will be produced instead of a UpSet plot.
 
-```{r plot-consensus-overlap}
+```{r plot-consensus-overlap, eval = FALSE}
 GRangesList(
   E2 = filter(consensus_peaks, E2),
   `E2+DHT` = filter(consensus_peaks, `E2+DHT`)
