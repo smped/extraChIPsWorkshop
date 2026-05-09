@@ -66,6 +66,7 @@ Whilst the primary focus will be on the usage of `extraChIPs`, additional import
 library(tidyverse)
 library(extraChIPsWorkshop)
 library(rtracklayer)
+library(plyranges)
 theme_set(theme_bw())
 ```
 
@@ -212,7 +213,9 @@ Note that `reduce()` was called directly from the `GenomicRanges` namespace.
 This is to avoid conflicts with `reduce()` from `purrr` which is loaded by the `tidyverse`.
 Some people may prefer to use the `r BiocStyle::CRANpkg("conflicted")` package to resolve these conflicts.
 
-## Fixed Width Peaks
+# Differential Signal Analysis Using Fixed Width Peaks
+
+## Loading and Inspecting Peaks
 
 Now that we've prepared the external data, we can move to the peaks we're actually interested in.
 The first set of peaks, we'll work with are associated with the Estrogen Receptor (ER$\alpha$) after immunoprecipitation, and have been prepared under two conditions, 1) control (media with estradiol, E2) and 2) DHT-treated (E2+DHT).
@@ -234,7 +237,7 @@ This effectively extends the `.bed` format with the addition of key metrics defi
 The final column `peak` denoted the position within the provided range, where the peak signal is estimated to be.
 Let's just look at the first file
 
-```{r}
+```{r import-peaks1}
 importPeaks(samples_er$path[1])
 ```
 
@@ -254,11 +257,49 @@ er_peaks
 ```
 
 Again, we have a `GRangesList` containing each sample.
-Let's explore our peaks, firstly by using `plotOverlaps()` to see how many peaks are shared between samples.
-Under the hood, this uses the package `r BiocStyle::CRANpkg("SimpleUpset")` to create UpSet plots.
+
+The first thing we might like to is compare peak widths for each sample.
+Although, we'll used fixed-width peaks when performing differential signal analysis, the output from a peak caller will generally return peaks of varying widths.
+The convenience function, `plotGrlCol()` will plot a column from the `mcols` element of any `GRangesList`, and will create a boxplot the width of ranges within each element by default.
+Given the plot is a standard `ggplot` object, we can simply transform the y-axis using `scale_y_log10()` using conventional syntax.
+
+```{r plot-peak-width}
+plotGrlCol(er_peaks) + scale_y_log10()
+```
+
+This figure shows a boxplot for each element, with the total number of peaks shown as a label at the median position for every box.
+The 10th percentile for all values across all elements is also shown by default as a blue dashed line.
+
+We can easily modify this to show any of the other columns, such as the `score` column.
+The function enables multiple geoms (`r pander::pander(formals(plotGrlCol)$geom)`), and if we pass the samples data.frame (`df = samples_er`), we can specify which column matches the names of each `GRangesList` element (`.id = "id"`).
+As a result, additional aesthetics, like `fill` can be added using this data frame.
+Labels and horizontal lines can also be omitted if preferred, in any combination.
+
+```{r plot-peak-scores}
+treat_colours <- setNames(c("steelblue", "red3"), treat_levels)
+er_peaks %>% 
+  plotGrlCol(
+    var = "score", geom = "violin", quantile.linetype = 1, quantiles = 0.5, 
+    .id = "id", df = samples_er, fill = "treat", 
+    ## Setting the size of the quantile to NULL will hide the label whilst 
+    ## showing the line. Here, we're showing the 50th percentile.
+    q = 0.5, q_size = NULL, 
+    ## Setting `total_geom= "none"` will also hide the totals
+    total_geom = "none"
+  ) +
+  scale_fill_manual(values = treat_colours) +
+  scale_y_log10()
+```
+
+
+Now let's check how many peaks identified in each sample are shared between the other samples, using `plotOverlaps()`
+Under the hood, this uses the package `r BiocStyle::CRANpkg("SimpleUpset")` to create UpSet plots if the input list object has 4 or more elements.
+It should be noted that the peak numbers shown here *are not the true peak numbers*.
+The ranges found in each element are first merged, with overlapping ranges combined.
+Instead, this figure shows the total number of the merged peaks which each sample overlaps.
+This step is included given that peaks will *almost never* share identical co-ordinates between even technical replicates and attempting to show identical co-ordinates would be uninformative.
 
 ```{r plot-er-overlaps}
-treat_colours <- setNames(c("steelblue", "red3"), treat_levels)
 plotOverlaps(
   er_peaks, 
   sort_sets = "none", set_col = rep(treat_colours, each = 3), exp_sets = 0.25
@@ -271,30 +312,114 @@ This illustrates our challenge nicely!
 We're not going to be looking for peaks where ER is absent/persent in either condition.
 Rather where going to try and find peaks where the *signal changes* after DHT treatment, i.e. Differential Signal Analysis
 
-We can also just inspect the features of each sample, starting with peak width across all samples.
-The convenience function `plotGrlCols()` enables us to plot a single column from each element of a `GRangesList` object.
-By default, the "width" will be shown so let's plot the `score` column.
-A dashed line will be drawn at the combined 10th percentile by default, as will the total number of ranges in each element, which in this use case, represents the number of peaks in each sample
+## Forming Consensus Peaks
 
-```{r plot-grl-score-box}
-plotGrlCol(er_peaks, var = "score") + scale_y_log10()
-```
+Moving towards differential signal analysis, we need to carefully define the regions, i.e. peaks, we'll use to detect changes in ER binding.
+It's important to recognise the nature of ChIP-Seq signal at this point.
+If we assumed stict diploidy for every genoic region, which is perhaps unrealistic for cell lines, there would be a maximum of 2 DNA fragments able to be pulled down from every cell in the source material.
+Our combined signal, represents the proportion of possible sites within the source material where the ChIP target can be bound.
+The saturation point would be exactly two DNA fragments from every cell in the sample.
 
-This is a standard `ggplot` object so it's easy to modify how we choose, like transforming the y-axis to be log~10~.
+Changes in ChIP signal are subtly different to differential expression in RNA-Seq.
+Differential Signal Analysis in ChIP-Seq represents the change in the number of sites within the source material which our target has bound.
+This is a dynamic process, where changes may occur differently over time in different cells, and in most cell lines, there is considerable diversity within the cell culture.
+ChIP-seq represents a snapshot at a given time point.
 
-The plots enables multiple geoms (`r pander::pander(formals(plotGrlCol)$geom)`).
-If we pass the samples data.frame (`df = samples_er`), and indicate which column matches the names of the `GRangesList` (`.id = "id"`), additional aesthetics, like `fill` can be added.
-Labels and horizontal lines can also be omitted if preferred, in any combination.
+In order to compare between treatment groups, we need to define strict regions within which we will compare signal.
+Given that we have two conditions, we could choose to define a set of *consensus regions* across all samples or within each treatment.
+Today, we'll form consensus peaks within each treatment group, then across treatment groups.
+Consensus peaks can simply be considered as genomic regions where signal is detected across multiple samples.
 
-```{r plot-grl-width-violin}
+As a first example, let's make consensus peaks just from the E2 treated samples.
+We can take advantage of piping to do this *on-the-fly* just to inspect the output
+
+```{r e2-consensus}
 er_peaks %>% 
-  plotGrlCol(
-    var = "width", geom = "violin", quantile.linetype = 1, quantiles = 0.5, 
-    .id = "id", df = samples_er, fill = "treat", q = 0.5, total_geom = "none"
-  ) +
-  scale_fill_manual(values = treat_colours) +
-  scale_y_log10()
+  subset(samples_er$treat == "E2") %>% 
+  makeConsensus(p = 2/3)
 ```
+
+Here we've set the condition that to keep a peak, it needs to have been detected in 2/3 of samples.
+We've relied on the default setting `method = "union"` which simply takes the union of ranges across all samples, then finds how many samples overlap the union ranges.
+
+In addition, we can keep any additional columns, such as the centre positions we've already included as we loaded the peaks.
+
+```{r e2-consensus-centre}
+er_peaks %>% 
+  subset(samples_er$treat == "E2") %>% 
+  makeConsensus(p = 2/3, var = "centre")
+```
+
+This will be returned as a list column, so taking the average may be a wise move to find the approximate centre position as an average of all individual samples.
+
+```{r e2-consensus-centre-mean}
+er_peaks %>% 
+  subset(samples_er$treat == "E2") %>% 
+  makeConsensus(p = 2/3, var = "centre") %>% 
+  mutate(centre = map_dbl(centre, mean))
+```
+
+Now we understand the process for a given condition, we can use `lapply` to split our `GRangesList` by treatment group, then perform the above process across both treatment groups.
+
+```{r consensus-peaks}
+consensus_peaks <- er_peaks %>% 
+  split(samples_er$treat) %>% 
+  lapply(
+    \(peaks) {
+      peaks %>% 
+        makeConsensus(p = 2 / 3, var = "centre") %>% 
+        mutate(centre = map_dbl(centre, mean)) 
+    }
+  ) %>% 
+  GRangesList() %>% 
+  makeConsensus(var = "centre") %>% 
+  mutate(
+    centre = as.integer(map_dbl(centre, mean)),
+    region = bestOverlap(., regions) %>% fct(names(regions))
+  )
+```
+
+Again, we can use `plotOverlaps()` to identify peaks unique to either condition, or shared between the two.
+Given there are only two elements to the input `GRangesList`, a VennDiagram will be produced instead of a UpSet plot.
+
+```{r plot-consensus-overlap}
+GRangesList(
+  E2 = filter(consensus_peaks, E2),
+  `E2+DHT` = filter(consensus_peaks, `E2+DHT`)
+) %>% 
+  plotOverlaps(set_col = treat_colours)
+```
+
+In the final line when creating consensus peaks, we've also mapped each peak to the feature that it overlaps with the highest proportion, using `bestOverlap()`.
+This way we have not only created our consensus peaks, but we've mapped them to the most likely genomic feature.
+Despite how terribly unfashionable pie charts are, they can still be useful for looking at the distribution of regions our peaks have been mapped to.
+
+```{r plot-pit}
+plotPie(consensus_peaks, fill = "region", total_size = 5) +
+  scale_fill_brewer(palette = "Set1")
+```
+
+This figure is highly customisable, but for now let's move on.
+
+## DSA With Fixed-Width Peaks
+
+These consensus peaks will be of variable width, and as such, the final step is to create the fixed width peaks we can use for DSA.
+Here we can take advantage of `mutate` from plyranges to add the chromosome names to the centre.
+This is followed by the helper function `colToRanges()` which will *overwrite the existing ranges* with another provided range.
+
+```{r}
+centred_peaks <- consensus_peaks %>% 
+  mutate(range = paste(seqnames(.), centre, sep = ":")) %>% 
+  colToRanges("range", seqinfo = seqinfo(.)) %>% 
+  resize(width = 200, fix = 'center') 
+```
+
+In the above, we're creating a character vector using `paste()` by adding the chromosome names to the estimated centre, and because this is coercible to a `GRanges` object, we can then shift it to the actual ranges of the object.
+After performing this operation, we're resizing the ranges to be 200bp, keeping the previously estimated centre at the centre of the ranges.
+We may remember from our earlier plot showing peak width, that >90% of peaks will be wider than 184bp, and as such, 200bp positioned at our best estimate of the centre position, may be a suitable choice for performing analysis.
+
+In this way we've created a suitable representation of the consensus peaks on which we can perform our analysis.
+It's important to note that the peaks of interest are the consensus peaks, these are simply a statistically useful representation of them on which we can perform our analysis.
 
 
 

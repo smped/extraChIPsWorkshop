@@ -23,10 +23,12 @@ Suggests:
     knitr,
     pander,
     pkgdown,
+    plyranges,
     rmarkdown,
     rtracklayer,
     SimpleUpset,
-    tidyverse
+    tidyverse,
+    VennDiagram
 URL: https://smped.github.io/extraChIPsWorkshop/
 BugReports: https://github.com/smped/extraChIPsWorkshop/issues/new/choose
 VignetteBuilder: knitr
