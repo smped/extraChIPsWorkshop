@@ -17,12 +17,16 @@ RoxygenNote: 7.3.3
 Depends: 
     extraChIPs
 Suggests: 
+    apeglm,
     Biobase,
     BiocStyle,
     BiocFileCache,
     BiocParallel,
     csaw,
     DFplyr,
+    ggforce,
+    Gviz,
+    harmonicmeanp,
     knitr,
     otelsdk,
     pander,
