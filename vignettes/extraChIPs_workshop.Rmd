@@ -67,6 +67,15 @@ library(tidyverse)
 library(extraChIPsWorkshop)
 library(rtracklayer)
 library(plyranges)
+library(Rsamtools)
+library(csaw)
+library(BiocParallel)
+library(DFplyr)
+library(quantro)
+library(edgeR)
+library(magrittr)
+library(patchwork)
+library(ggrepel)
 theme_set(theme_bw())
 ```
 
@@ -222,7 +231,7 @@ The first set of peaks, we'll work with are associated with the Estrogen Recepto
 The sample data frame can be formed as follows.
 
 ```{r samples-er}
-treat_levels <- c("E2", "E2+DHT")
+treat_levels <- c("E2", "E2DHT")
 samples_er <- tibble(
   id = paste0("SRR831518", seq(0, 5)),
   target = "ER",
@@ -360,6 +369,8 @@ er_peaks %>%
 ```
 
 Now we understand the process for a given condition, we can use `lapply` to split our `GRangesList` by treatment group, then perform the above process across both treatment groups.
+As a final step, we're using `mapByFeature()` to assign peaks to genes.
+This can utilise HiC (or HiChIP) interactions to confidently map long-range interactions, however at it's simplest mapping can be performed simply by providing a set of promoters and genes, with each peak being mapped to the most likely, or nearest gene, up to 100kb away from the peak.
 
 ```{r consensus-peaks}
 consensus_peaks <- er_peaks %>% 
@@ -373,19 +384,22 @@ consensus_peaks <- er_peaks %>%
   ) %>% 
   GRangesList() %>% 
   makeConsensus(var = "centre") %>% 
+  mutate(centre = as.integer(map_dbl(centre, mean))) %>% 
   mutate(
-    centre = as.integer(map_dbl(centre, mean)),
     region = bestOverlap(., regions) %>% fct(names(regions))
-  )
+  ) %>% 
+  mapByFeature(genes = subset(gtf, type == "gene"), prom = regions$promoter)
 ```
+
+Using this process, we've not only created a set of consensus peaks, but we've mapped them to key defined genomic regions and the most likely gene being targeted byt he binding event.
 
 Again, we can use `plotOverlaps()` to identify peaks unique to either condition, or shared between the two.
 Given there are only two elements to the input `GRangesList`, a VennDiagram will be produced instead of a UpSet plot.
 
-```{r plot-consensus-overlap, eval = FALSE}
+```{r plot-consensus-overlap}
 GRangesList(
   E2 = filter(consensus_peaks, E2),
-  `E2+DHT` = filter(consensus_peaks, `E2+DHT`)
+  E2DHT = filter(consensus_peaks, E2DHT)
 ) %>% 
   plotOverlaps(set_col = treat_colours)
 ```
@@ -394,9 +408,10 @@ In the final line when creating consensus peaks, we've also mapped each peak to 
 This way we have not only created our consensus peaks, but we've mapped them to the most likely genomic feature.
 Despite how terribly unfashionable pie charts are, they can still be useful for looking at the distribution of regions our peaks have been mapped to.
 
-```{r plot-pit}
+```{r plot-pi3}
+region_colours <- setNames(hcl.colors(length(regions), rev = TRUE), names(regions))
 plotPie(consensus_peaks, fill = "region", total_size = 5) +
-  scale_fill_brewer(palette = "Set1")
+  scale_fill_manual(values = region_colours)
 ```
 
 This figure is highly customisable, but for now let's move on.
@@ -407,19 +422,208 @@ These consensus peaks will be of variable width, and as such, the final step is 
 Here we can take advantage of `mutate` from plyranges to add the chromosome names to the centre.
 This is followed by the helper function `colToRanges()` which will *overwrite the existing ranges* with another provided range.
 
-```{r}
+```{r centred-peaks}
 centred_peaks <- consensus_peaks %>% 
   mutate(range = paste(seqnames(.), centre, sep = ":")) %>% 
   colToRanges("range", seqinfo = seqinfo(.)) %>% 
-  resize(width = 200, fix = 'center') 
+  resize(width = 400, fix = 'center') 
 ```
 
 In the above, we're creating a character vector using `paste()` by adding the chromosome names to the estimated centre, and because this is coercible to a `GRanges` object, we can then shift it to the actual ranges of the object.
-After performing this operation, we're resizing the ranges to be 200bp, keeping the previously estimated centre at the centre of the ranges.
+After performing this operation, we're resizing the ranges to be 400bp, keeping the previously estimated centre at the centre of the ranges.
 We may remember from our earlier plot showing peak width, that >90% of peaks will be wider than 184bp, and as such, 200bp positioned at our best estimate of the centre position, may be a suitable choice for performing analysis.
 
 In this way we've created a suitable representation of the consensus peaks on which we can perform our analysis.
 It's important to note that the peaks of interest are the consensus peaks, these are simply a statistically useful representation of them on which we can perform our analysis.
+
+```{r export-er-se, eval = FALSE}
+## DO NOT RUN ##
+## This is my code for preparing the counts. 
+## Counts will be loaded in the next chunk
+bfl <- here::here("data", "bam", paste0(samples_er$id, ".bam")) %>% 
+  BamFileList()
+names(bfl) <- samples_er$id
+rp <- readParam(pe = "none")
+er_se <- regionCounts(bfl, centred_peaks, ext = 175, param = rp)
+seqinfo(er_se) <- sq
+colData(er_se) <- colData(er_se) %>% 
+  mutate(
+    id = rownames(.),
+    bam.files = basename(bam.files)
+  ) %>% 
+  left_join(
+    dplyr::select(samples_er, id, target, treat), by = "id"
+  )
+write_rds(er_se, here::here("inst/extdata/counts/er_se.rds"), compress = "gz")
+```
+
+The next step after defining the peaks would be to load the counts directly from the bam file containing the alignments.
+The code chunk above is how counts were prepared for this workshop noting the following steps
+
+1. Define a `BamFileList` then set the names to match the `id` column in `samples_er`
+2. Use `regionCounts()` from the package `r BiocStyle::Biocpkg("csaw")` [@Lun2016-cs], first setting any key parameters for reading alignments.
+Here, the reads were single-end, so we set `pe = "none"`. The reads were extended by 175 bp as is common for ChIP-seq as this was the estimated fragment length from the macs2 output
+3. The `colData` element of the returned `SummarizedExperiment` was modified using `mutate()` and `left_join()` from `r BiocStyle::Biocpkg("DFplyr")` to incorporate the required sample information
+
+Counts were parsed from bam files using a standard laptop running Ubuntu with 16Gb RAM and the output saved withi nthe workshop package.
+In order to load the pre-pepared counts for this workshop, simply run the following code, then inspect the rowData and colData.
+
+```{r er-se}
+f <- system.file("extdata/counts/er_se.rds", package = "extraChIPsWorkshop")
+er_se <- read_rds(f)
+rowRanges(er_se)
+colData(er_se)
+```
+
+Now that we have our counts, the first thing we might like to do is inspect them in order to select a normalisation method.
+However, normalisation in ChIP-seq takes a little more care than RNA-seq.
+It is quite plausible that the number of sites bound by a ChIP target may be substantially different under varying conditions.
+A canonical example of this is the Androgen Receptor (AR) which is sequestered in the cytoplasm in the absence of androgens, the is translocated to the nucleus upon encountering it's ligand.
+Almost no binding would be expected in the absence of androgens, followed by a sigificant increase in binding.
+Under these circumstances, the most appropriate normalisation would be library size only.
+
+In order to check if there is an overall shift in signal, corresponding to global change in binding the package `r BiocStyle::Biocpkg("qantro")` [@Hicks2015-ee] can be used.
+The primary test returned is for the equivalence of medians between groups, returned as the `anovaPval`
+
+
+```{r qtest}
+qtest <- quantro(assay(er_se, "counts"), groupFactor = er_se$treat)
+qtest
+```
+
+The test results for this dataset are >> 0.05 and as such we should accept H~0~ that sample medians are equivalent between groups.
+Permutation tests are also able to be performed, however these are uninformative for n = 6 samples and were not performed here.
+
+Taking this information we could choose many of the standard RNA-Seq normalisation methods.
+The most conservative would be `method = "none"`, which corresponds to library size normalsiation, with common alternatives being TMM [@Robinson2010-qp] or RLE [@Anders2010-sd].
+RLE is commonly used by the package `r BiocStyle::Biocpkg("DiffBind")` making it an established choice for ChIP-Seq data, so let's create a new assay in our `SummarizedExperiment` object called `logCPM`, using these normalisation factors.
+
+
+```{r add-logcpm}
+assay(er_se, "logCPM") <- er_se %>% 
+  SE2DGEList() %>% 
+  calcNormFactors("RLE") %>% 
+  cpm(log = TRUE) %>% 
+  set_rownames(NULL)
+```
+
+Now we can compare our samples both before and after normalisation using `plotAssayDensities()`.
+For before normalisation, can use the `log1p()` transformation on the raw counts.
+
+```{r plot-assay-densities}
+A <- plotAssayDensities(er_se, assay = "counts", colour = "treat", trans = "log1p") +
+  scale_colour_manual(values = treat_colours)
+B <- plotAssayDensities(er_se, assay = "logCPM", colour = "treat") +
+  scale_colour_manual(values = treat_colours)
+A + B + 
+  plot_layout(guides = "collect", axes = "collect") +
+  plot_annotation(tag_levels = "A")
+```
+
+Other technical checks we might like to perform are RLE and PCA.
+Using `plotAssayRle()`, we can check RLE by individual sample, or by treatment group
+
+```{r plot-assay-rle}
+A <- plotAssayRle(er_se, "logCPM", fill = "treat") +
+  scale_fill_manual(values = treat_colours)
+B <- plotAssayRle(er_se, "logCPM", fill = "treat", by_x = "treat") +
+  scale_fill_manual(values = treat_colours)
+A + B + 
+  plot_layout(guides = "collect", axes = "collect", widths = c(2, 1)) +
+  plot_annotation(tag_levels = "A")
+```
+
+Similarly `plotAssayPCA()` allows for clear data inspection and manipulation as a standard `ggplot` object
+
+```{r plot-assay-pca}
+plotAssayPCA(er_se, "logCPM", colour = "treat") +
+  scale_colour_manual(values = treat_colours)
+```
+
+From here we move to the analysis itself, and using the standard approaches of `r BiocStyle::Biocpkg("edgeR")` [@Chen2025-ed] we can define our model matrix.
+Analysis will be performed directly on the counts using `glmQLFit()` followed by `glmQLFTest()`.
+Although no demonstrated here, setting a value for the `fc` argument will switch the testing `glmQLFTreat()` which applies a range-based null-hypotesis [@McCarthy2009-qf].
+
+
+```{r er-diffsig}
+X <- model.matrix(~treat, data = colData(er_se))
+er_diffsig <- er_se %>% 
+  fitAssayDiff(design = X, norm = "RLE", asRanges = TRUE) %>% 
+  addDiffStatus(drop = TRUE) 
+table(er_diffsig$status)
+```
+
+The standard MA-plot and volcano-plots can be easily produced from these results.
+The following code does make these look a little more complicated, however:
+
+1. The convenience function `as_tibble.GRanges()` is deomnstrated which will coerce the genomic ranges to character vector column whilst returning the mcols element as a tibble alongside the ranges. (Seqinfo is lost in this step)
+2. The gene-names are manipulated using `map_chr(gene_name, paste, collapse = ";")` to coerce from a list to a character vector, making labelling simpler
+3. Labels are added for the top-ranked peaks by (A) logFC and (B) significance
+
+```{r ma-plots}
+status_colours <- c(
+  Undetected = "grey90", Unchanged = "grey50",
+  Decreased = "royalblue2", Increased = "red3"
+)
+A <- er_diffsig %>%
+  as_tibble() %>% 
+  ggplot(aes(logCPM, logFC)) +
+  geom_point(aes(colour = status), alpha = 0.8) +
+  geom_smooth(se = FALSE, method = "loess") +
+  geom_label_repel(
+    aes(colour = status, label = gene_name),
+    data = . %>% 
+      dplyr::filter(status %in% c("Increased", "Decreased")) %>% 
+      arrange(desc(logFC)) %>% 
+      mutate(gene_name = map_chr(gene_name, paste, collapse = "; ")) %>% 
+      dplyr::filter(gene_name != "") %>% 
+      dplyr::slice(seq_len(8)),
+    size = 3, alpha = 0.8, show.legend = FALSE, fontface = "italic"
+  ) +
+  labs(colour = "Status") +
+  scale_colour_manual(values = status_colours) 
+B <- er_diffsig %>%
+  as_tibble() %>% 
+  ggplot(aes(logFC, -log10(PValue))) +
+  geom_point(aes(colour = status), alpha = 0.8) +
+  geom_label_repel(
+    aes(colour = status, label = gene_name),
+    data = . %>% 
+      dplyr::filter(status %in% c("Increased", "Decreased")) %>% 
+      arrange(PValue) %>% 
+      mutate(gene_name = map_chr(gene_name, paste, collapse = "; ")) %>% 
+      dplyr::filter(gene_name != "") %>% 
+      dplyr::slice(seq_len(8)),
+    size = 3, alpha = 0.8, show.legend = FALSE, fontface = "italic"
+  ) +
+  labs(colour = "Status") +
+  scale_colour_manual(values = status_colours) 
+A + B + 
+  plot_layout(guides = "collect" ) + plot_annotation(tag_levels = "A") &
+  theme(legend.position = "bottom")
+```
+
+A breakdown of results by genomic region can also be produced using `plotSplitDonut()`.
+The defaults for this figure are generally quite useable, however the level of customisation provided is considerable.
+The following figure is heavily customised using the following options:
+
+1. Setting separate palettes for inner and outer rings
+2. Using `glue` syntax to customise the default labels
+3. Rotating and shifting the labels
+
+```{r}
+er_diffsig %>% 
+  plotSplitDonut(
+    inner = "region", outer = "status", label_size = 4,
+    inner_palette = region_colours,
+    outer_palette = status_colours,
+    inner_glue = "{str_wrap(.data[[inner]], 15)}\n{comma(n)} ({percent(p,0.1)})",
+    outer_glue = "{comma(n)} {.data[[outer]]}",
+    inner_label_alpha = 0.6, inner_label_colour = "white",
+    outer_label_colour = "palette", outer_rotate = TRUE,
+    outer_label = "text", outer_min_p = 0, outer_nudge_r = 0.6
+  )
+```
 
 
 
