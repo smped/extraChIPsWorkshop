@@ -14,7 +14,8 @@ vignette: >
 knitr::opts_chunk$set(
   collapse = TRUE,
   comment = "#>",
-  message = FALSE, warning = FALSE
+  message = FALSE, warning = FALSE,
+  fig.width = 10, fig.height = 8
 )
 ```
 
@@ -418,6 +419,8 @@ This figure is highly customisable, but for now let's move on.
 
 ## DSA With Fixed-Width Peaks
 
+### Loading Counts
+
 These consensus peaks will be of variable width, and as such, the final step is to create the fixed width peaks we can use for DSA.
 Here we can take advantage of `mutate` from plyranges to add the chromosome names to the centre.
 This is followed by the helper function `colToRanges()` which will *overwrite the existing ranges* with another provided range.
@@ -475,36 +478,23 @@ rowRanges(er_se)
 colData(er_se)
 ```
 
+### Normalisation
+
 Now that we have our counts, the first thing we might like to do is inspect them in order to select a normalisation method.
 However, normalisation in ChIP-seq takes a little more care than RNA-seq.
 It is quite plausible that the number of sites bound by a ChIP target may be substantially different under varying conditions.
-A canonical example of this is the Androgen Receptor (AR) which is sequestered in the cytoplasm in the absence of androgens, the is translocated to the nucleus upon encountering it's ligand.
-Almost no binding would be expected in the absence of androgens, followed by a sigificant increase in binding.
+A canonical example of this is the Androgen Receptor (AR) which is sequestered in the cytoplasm in the absence of androgens, then is translocated to the nucleus upon encountering it's ligand.
+Almost no binding would be expected in the absence of androgens, followed by a significant increase in binding.
 Under these circumstances, the most appropriate normalisation would be library size only.
 
-In order to check if there is an overall shift in signal, corresponding to global change in binding the package `r BiocStyle::Biocpkg("qantro")` [@Hicks2015-ee] can be used.
-The primary test returned is for the equivalence of medians between groups, returned as the `anovaPval`
-
-
-```{r qtest}
-qtest <- quantro(assay(er_se, "counts"), groupFactor = er_se$treat)
-qtest
-```
-
-The test results for this dataset are >> 0.05 and as such we should accept H~0~ that sample medians are equivalent between groups.
-Permutation tests are also able to be performed, however these are uninformative for n = 6 samples and were not performed here.
-
-Taking this information we could choose many of the standard RNA-Seq normalisation methods.
-The most conservative would be `method = "none"`, which corresponds to library size normalsiation, with common alternatives being TMM [@Robinson2010-qp] or RLE [@Anders2010-sd].
-RLE is commonly used by the package `r BiocStyle::Biocpkg("DiffBind")` making it an established choice for ChIP-Seq data, so let's create a new assay in our `SummarizedExperiment` object called `logCPM`, using these normalisation factors.
+The most simple way to normalise count data is to scale by library size, as underlies the CPM or logCPM transformation.
+Let's add a logCPM assay to our `SummarizedExperiment` object in order to help as we inspect our data.
 
 
 ```{r add-logcpm}
-assay(er_se, "logCPM") <- er_se %>% 
-  SE2DGEList() %>% 
-  calcNormFactors("RLE") %>% 
+assay(er_se, "logCPM") <- er_se %>%
   cpm(log = TRUE) %>% 
-  set_rownames(NULL)
+  set_rownames(rownames(er_se)) 
 ```
 
 Now we can compare our samples both before and after normalisation using `plotAssayDensities()`.
@@ -520,8 +510,11 @@ A + B +
   plot_annotation(tag_levels = "A")
 ```
 
+Notice how the densities before normalisation were quite spread out, then after normalising by library size the densities appeared far more similar.
+
 Other technical checks we might like to perform are RLE and PCA.
-Using `plotAssayRle()`, we can check RLE by individual sample, or by treatment group
+Using `plotAssayRle()`, we can check RLE by individual sample as is most common.
+Alternatively, we can visualise RLE by treatment group to pickup any more subtle differences between treatments.
 
 ```{r plot-assay-rle}
 A <- plotAssayRle(er_se, "logCPM", fill = "treat") +
@@ -540,15 +533,45 @@ plotAssayPCA(er_se, "logCPM", colour = "treat") +
   scale_colour_manual(values = treat_colours)
 ```
 
+Beyond library size normalisation, we could choose many of the standard RNA-Seq normalisation methods.
+The most conservative would be `method = "none"`, which corresponds to library size normalisation, with common alternatives being TMM [@Robinson2010-qp] or RLE [@Anders2010-sd].
+RLE is commonly used by the package `r BiocStyle::Biocpkg("DiffBind")` [@DiffBind2012] making it an established choice for ChIP-Seq data.
+
+Before we make our decision, we can check to see if there is an overall shift in signal corresponding to global change in binding.
+The package `r BiocStyle::Biocpkg("qantro")` [@Hicks2015-ee] can be used for this, and the primary test returned is for the equivalence of medians between groups, returned as the `anovaPval`.
+If H~0~ is accepted under this test, methods such as TMM or RLE may be suitable options.
+
+```{r qtest}
+qtest <- quantro(assay(er_se, "logCPM"), groupFactor = er_se$treat)
+qtest
+```
+
+The test results for this dataset are p >> 0.05 and as such we should accept H~0~ that sample medians are equivalent between groups.
+Permutation tests are also able to be performed, however these are uninformative for n = 6 samples and were not performed here.
+
+### Model Fitting
+
 From here we move to the analysis itself, and using the standard approaches of `r BiocStyle::Biocpkg("edgeR")` [@Chen2025-ed] we can define our model matrix.
 Analysis will be performed directly on the counts using `glmQLFit()` followed by `glmQLFTest()`.
-Although no demonstrated here, setting a value for the `fc` argument will switch the testing `glmQLFTreat()` which applies a range-based null-hypotesis [@McCarthy2009-qf].
+
+The function `fitAssayDiff()` provides the same normalisation options as `edgeR::calcNormFactors()` with RLE corresponding to the normalisation approach favoured by `r BiocStyle::Biocpkg("DESeq2")`.
+Three tests are implemented:
+
+1. `method = "qlf"` fits the glmQLFTest from edgeR using counts and the selected normalisation method
+2. `method = "lt"` fits the `limma-trend` model on logCPM values [@Law2014-xq], either as passed by a suitable additional assay, or after applying the selected normalisation method.
+3. `method = "wald"` fits the nbinomWaldTest from `DESeq2` [@Love2014-de], noting this corresponds to the default model in `DiffBind`
+
+By default, the totals *as derived from the complete bam file* are used for library size.
+Choosing another option should only be performed with caution and relies on the total signal being highly consistent between all treatment groups.
+If the ChIP target shows markedly different signal levels, as may be expected with the Androgen Receptor when sequestered in the cytoplasm, any alternative columns will be highly inappropriate.
+
+Although not demonstrated here, setting a value for the `fc` argument will switch the testing `glmQLFTreat()` which applies a range-based null-hypothesis [@McCarthy2009-qf], or will apply the analogous strategy for the nbinomWaldTest in `DESeq2`.
 
 
 ```{r er-diffsig}
 X <- model.matrix(~treat, data = colData(er_se))
 er_diffsig <- er_se %>% 
-  fitAssayDiff(design = X, norm = "RLE", asRanges = TRUE) %>% 
+  fitAssayDiff(design = X, norm = "RLE", asRanges = TRUE, method = "qlf") %>% 
   addDiffStatus(drop = TRUE) 
 table(er_diffsig$status)
 ```
@@ -611,7 +634,7 @@ The following figure is heavily customised using the following options:
 2. Using `glue` syntax to customise the default labels
 3. Rotating and shifting the labels
 
-```{r}
+```{r er-split-donut}
 er_diffsig %>% 
   plotSplitDonut(
     inner = "region", outer = "status", label_size = 4,
