@@ -13,7 +13,6 @@ License: MIT + file LICENSE
 Encoding: UTF-8
 LazyData: true
 Roxygen: list(markdown = TRUE)
-RoxygenNote: 7.3.3
 Depends: 
     extraChIPs
 Suggests: 
@@ -43,3 +42,4 @@ URL: https://smped.github.io/extraChIPsWorkshop/
 BugReports: https://github.com/smped/extraChIPsWorkshop/issues/new/choose
 VignetteBuilder: knitr
 DockerImage: ghcr.io/smped/extrachipsworkshop:latest
+Config/roxygen2/version: 8.0.0

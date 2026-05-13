@@ -158,7 +158,7 @@ this will classify every base in the genome defined by the `Seqinfo` object into
 - By default, promoters are defined as 2500bp upstream & 500 bo downstream from any TSS, although this can easily be changed. 
 Overlapping promoters from multiple transcripts within a gene are merged into larger promoter regions.
 - Similarly upstream promoters are simply defined as being 5000bp upstream from a TSS, excluding the regions already defined as promoters.
-- Setting `intron = FALSE` will define any region within a gene, excluding promoter regions, as a gene body. If `intron = TRUE`, the intreagenic regions will be separated into introns and exons.
+- Setting `intron = FALSE` will define any region within a gene, excluding promoter regions, as a gene body. If `intron = TRUE`, the intragenic regions will be separated into introns and exons.
 
 
 ```{r define-regions}
@@ -238,7 +238,7 @@ samples_er <- tibble(
   target = "ER",
   treat = factor(rep(treat_levels, each = 3), levels = treat_levels),
   file = paste0(id, "_peaks.narrowPeak"),
-  path = system.file("extdata/er_peaks", file, package = "extraChIPsWorkshop")
+  path = system.file("extdata/peaks", file, package = "extraChIPsWorkshop")
 )
 ```
 
@@ -389,7 +389,7 @@ consensus_peaks <- er_peaks %>%
   mutate(
     region = bestOverlap(., regions) %>% fct(names(regions))
   ) %>% 
-  mapByFeature(genes = subset(gtf, type == "gene"), prom = regions$promoter)
+  mapByFeature(genes = split_gtf$gene, prom = regions$promoter)
 ```
 
 Using this process, we've not only created a set of consensus peaks, but we've mapped them to key defined genomic regions and the most likely gene being targeted byt he binding event.
@@ -552,8 +552,6 @@ Permutation tests are also able to be performed, however these are uninformative
 ### Model Fitting
 
 From here we move to the analysis itself, and using the standard approaches of `r BiocStyle::Biocpkg("edgeR")` [@Chen2025-ed] we can define our model matrix.
-Analysis will be performed directly on the counts using `glmQLFit()` followed by `glmQLFTest()`.
-
 The function `fitAssayDiff()` provides the same normalisation options as `edgeR::calcNormFactors()` with RLE corresponding to the normalisation approach favoured by `r BiocStyle::Biocpkg("DESeq2")`.
 Three tests are implemented:
 
@@ -571,7 +569,7 @@ Although not demonstrated here, setting a value for the `fc` argument will switc
 ```{r er-diffsig}
 X <- model.matrix(~treat, data = colData(er_se))
 er_diffsig <- er_se %>% 
-  fitAssayDiff(design = X, norm = "RLE", asRanges = TRUE, method = "qlf") %>% 
+  fitAssayDiff(design = X, norm = "TMM", asRanges = TRUE, method = "qlf") %>% 
   addDiffStatus(drop = TRUE) 
 table(er_diffsig$status)
 ```
@@ -600,7 +598,7 @@ A <- er_diffsig %>%
       arrange(desc(logFC)) %>% 
       mutate(gene_name = map_chr(gene_name, paste, collapse = "; ")) %>% 
       dplyr::filter(gene_name != "") %>% 
-      dplyr::slice(seq_len(8)),
+      dplyr::slice(seq_len(10)),
     size = 3, alpha = 0.8, show.legend = FALSE, fontface = "italic"
   ) +
   labs(colour = "Status") +
@@ -616,7 +614,7 @@ B <- er_diffsig %>%
       arrange(PValue) %>% 
       mutate(gene_name = map_chr(gene_name, paste, collapse = "; ")) %>% 
       dplyr::filter(gene_name != "") %>% 
-      dplyr::slice(seq_len(8)),
+      dplyr::slice(seq_len(10)),
     size = 3, alpha = 0.8, show.legend = FALSE, fontface = "italic"
   ) +
   labs(colour = "Status") +
@@ -648,6 +646,37 @@ er_diffsig %>%
   )
 ```
 
+# Differential Signal Analysis Using Sliding Windows
 
+Analysis of peaks using fixed-width peaks can be a highly effective strategy for analysing changes in signal for binding sites, or any other suitable region.
+A common alternative approach is to use overlapping sliding-windows, as developed in `r BiocStyle::Biocpkg("csaw")` [@Lun2016-cs].
+Under this approach, statistical testing is performed in the entire set of overlapping windows, before merging and summarising results for a set of overlapping windows.
+The final results is a set of regions of variable width.
+
+Whilst there are no hard and fast rules, signal derived from ChIP targets such as the histone mark H3K27ac may be suitable candidates for this treatment.
+In general, this type of signal can range from smaller peaks fo similar size to classical transcription factors, to many kb of extended, active transcribed genes.
+Additionally, H3K27ac peaks can have dynamic shapes where bound transcription factors prevent the binding of H3K27ac antibodies, leading to troughs in the signal where TFs are bound.
+H3K27ac signal also doesn't change consistently across the entire region, but within each wider 'peak' signal may change within only subsections of the region.
+
+
+```{r load-h3k27ac}
+f <- paste("H3K27ac", c("E2", "E2DHT"), "merged.narrowPeak", sep = "_")
+h3k27ac_peaks <- system.file("extdata/peaks", f, package = "extraChIPsWorkshop") |>
+  importPeaks(
+    glueNames = "{basename(x) |> str_remove('_merged.narrowPeak') |> str_remove('H3K27ac_')}"
+  )
+```
+
+When calling H3K27ac peaks with `macs2` there are also no strict rules regarding the use of narrow or broad peaks, with some researchers choosing narrow peaks followed by manual merging.
+The peaks we've just loaded have been prepared using the narrowPeak setting in macs2, then merged by condition using the same strategy as demonstrated above for the ER peaks.
+The six libraries were `r pander::pander(paste0("SRR83151", 86:91))` on the [original BioProject](https://www.ncbi.nlm.nih.gov/Traces/study/?acc=PRJNA509779&o=acc_s%3Aa), with the first 3 being taken from control (E2) and the latter 3 being taken from E2+DHT treated samples.
+
+
+```{r plot-h3k-width}
+plotGrlCol(h3k27ac_peaks) + scale_y_log10()
+```
+
+As can be seen, H3K27ac peaks, even as identified using narrowPeak mode in `macs2` can range from 300bp to 30kb.
+As a result, choosing a suitable fixed-width can be challenging, and using sliding windows may offer a good choice for this type of signal.
 
 # References
