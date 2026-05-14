@@ -663,6 +663,7 @@ H3K27ac signal also doesn't change consistently across the entire region, but wi
 f <- paste("H3K27ac", c("E2", "E2DHT"), "merged.narrowPeak", sep = "_")
 h3k27ac_peaks <- system.file("extdata/peaks", f, package = "extraChIPsWorkshop") |>
   importPeaks(
+    seqinfo = sq, blacklist = exclude_ranges, 
     glueNames = "{basename(x) |> str_remove('_merged.narrowPeak') |> str_remove('H3K27ac_')}"
   )
 ```
@@ -676,7 +677,90 @@ The six libraries were `r pander::pander(paste0("SRR83151", 86:91))` on the [ori
 plotGrlCol(h3k27ac_peaks) + scale_y_log10()
 ```
 
+## Counting Alignments Using Sliding Windows
+
 As can be seen, H3K27ac peaks, even as identified using narrowPeak mode in `macs2` can range from 300bp to 30kb.
 As a result, choosing a suitable fixed-width can be challenging, and using sliding windows may offer a good choice for this type of signal.
+
+`windowCounts()` as provided by `r BiocStyle::Biocpkg("csaw")` [@Lun2016-cs] is very well suited to counting sliding windows, and we'll take advantage of this function here.
+The following chunk was executed locally during workshop preparation, and was able to be run on an Ubuntu latptop with 16Gb RAM, with the SummarizedExperiment `h3k27ac_windows` being 1.02Gb in size using `lobstr::obj_size(h3k27ac_windows)`
+
+``` r
+################
+## Do Not Run ##
+################
+rp <- readParam(restrict = seqlevels(sq))
+bfl <- list(
+  H3K27ac = here::here("data", "bam", paste0("SRR83151", 86:91, ".bam")) %>% 
+    BamFileList() %>% 
+    setNames(str_remove(names(.), ".bam")),
+  input = here::here("data", "bam", "SRR8315192.bam") %>% 
+    BamFileList() %>% 
+    setNames("SRR8315192")
+)
+h3k27ac_windows <- windowCounts(
+  bam.files = c(bfl$H3K27ac, bfl$input),
+  spacing = 60,
+  width = 180,
+  ext = 240,
+  filter = length(bfl$H3K27ac),
+  param = rp
+) 
+h3k27ac_windows <- h3k27ac_windows[!overlapsAny(h3k27ac_windows, exclude_ranges),]
+colData(h3k27ac_windows) <- colData(h3k27ac_windows) %>% 
+  mutate(
+    id = rownames(.),
+    target = ifelse(rownames(.) %in% names(bfl$H3K27ac), "H3K27ac", "input"),
+    treat = c(rep(c("E2", "E2DHT"), each = 3), NA)
+  )
+seqlevels(h3k27ac_windows) <- seqlevels(sq)
+seqinfo(h3k27ac_windows) <- sq
+h3k27ac_windows
+```
+
+  class: RangedSummarizedExperiment 
+  dim: 28328559 7 
+  metadata(6): spacing width ... param final.ext
+  assays(1): counts
+  rownames: NULL
+  rowData names(0):
+  colnames(7): SRR8315186 SRR8315187 ... SRR8315191 SRR8315192
+  colData names(7): bam.files totals ... target treat
+  
+Some brief points of note in the above code chunk
+
+- Whilst `exclude_ranges` could be provided in the `discard` argument of the `rp` object, some read extensions do overlap these ranges and the subsequent removal after counting is cleaner.
+- The `BamFileList` contained all 6 samples obtained using H3K27ac as the ChIP target, but also the *input sample*. An input samples are commonly used in ChIP-Seq and represent the background signal for each range, as may be obtained with an untargeted IgG precipitation.
+- There are no rules for the window sizes and spacing. Here, a window size of 180bp was chosen with a spacing of 60bp to ensure each nucleotide is covered by 3 windows
+- The fragment size was set using the `macs2` log files, as for the ER fragment size
+- The returned `Seqinfo` element of the `SummarizedExperiment` may contain sequences in a different order to the reference `sq` object being used for this entire workflow and there are two lines included after counting to ensure downstream compatibility with other objects
+
+## Discarding Uninformative Windows
+
+Now that we have alignments for >28m sliding windows across the entire genome, we might like to discard windows which are unlikely to contain H3K27ac signal.
+Performing statistical testing on these windows will lead to multiple false positives and will also be a waste of computational effort.
+Once again, there are no set rules for determining a window to contain signal or not, and one possible option would be to use the function `dualFilter()` which assesses the signal in each window for being suitably higher than the input signal, and above a signal floor.
+In addition, this uses a very simple approach by taking a set of 'guide ranges' thought to contain true H3K27ac signal.
+Thresholds for minimum signal and signal above background are then estimated to retain `q = 0.75` of the provided guide windows.
+Setting value to high will return a highly inclusive set of windows, but may also return many ranges with only background signal.
+Similarly, setting this too low return an exclusive set of windows, which may omit some windows with true signal.
+Data exploration shows values on the 0.7-0.8 range to be highly suitable, however, a number of alternative strategies may also be employed.
+
+The ranges expected to contain signal can be sourced from an independent experiment, ENCODE or any other source.
+Here, we'll use the consensus peaks already loaded, and derived from this dataset.
+
+``` r
+################
+## Do Not Run ##
+################
+h3k27ac_guides <- makeConsensus(h3k27ac_peaks)
+h3k27ac_se <- dualFilter(
+  x = h3k27ac_windows, bg = "SRR8315192", ref = h3k27ac_guides, q = 0.75
+)
+```
+
+This step will scan all bam files and can also be highly demanding computationally and time consuming.
+This is the only step which could not be run on a 16Gb laptop, and was instead run on a high-memory server.
+
 
 # References
