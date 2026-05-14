@@ -4,4 +4,4 @@ Dockerfile
 _pkgdown.yml
 ^.*\.Rproj$
 ^\.Rproj\.user$
-data/*
+data/
