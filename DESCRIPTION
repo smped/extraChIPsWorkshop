@@ -24,6 +24,7 @@ Suggests:
     csaw,
     DFplyr,
     ggforce,
+    glue,
     Gviz,
     harmonicmeanp,
     knitr,
@@ -35,9 +36,11 @@ Suggests:
     rmarkdown,
     Rsamtools,
     rtracklayer,
+    scales,
     SimpleUpset,
     tidyverse,
-    VennDiagram
+    VennDiagram,
+    viridisLite
 URL: https://smped.github.io/extraChIPsWorkshop/
 BugReports: https://github.com/smped/extraChIPsWorkshop/issues/new/choose
 VignetteBuilder: knitr

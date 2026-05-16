@@ -73,10 +73,13 @@ library(csaw)
 library(BiocParallel)
 library(DFplyr)
 library(quantro)
+library(qsmooth)
 library(edgeR)
 library(magrittr)
 library(patchwork)
 library(ggrepel)
+library(glue)
+library(viridisLite)
 theme_set(theme_bw())
 ```
 
@@ -226,7 +229,14 @@ Some people may prefer to use the `r BiocStyle::CRANpkg("conflicted")` package t
 
 # Differential Signal Analysis Using Fixed Width Peaks
 
-```{r}
+
+## Loading and Inspecting Peaks
+
+Now that we've prepared the external data, we can move to the peaks we're actually interested in.
+The first set of peaks, we'll work with are associated with the Estrogen Receptor (ER$\alpha$) after immunoprecipitation, and have been prepared under two conditions, 1) control (media with estradiol, E2) and 2) DHT-treated (E2+DHT).
+The complete sample data frame, including our later samples, can be formed as follows.
+
+```{r samples}
 treat_levels <- c("E2", "E2DHT")
 samples <- tibble(
   id = paste0("SRR83151", seq(80, 92)),
@@ -247,12 +257,7 @@ samples <- tibble(
   split(.$target)
 ```
 
-
-## Loading and Inspecting Peaks
-
-Now that we've prepared the external data, we can move to the peaks we're actually interested in.
-The first set of peaks, we'll work with are associated with the Estrogen Receptor (ER$\alpha$) after immunoprecipitation, and have been prepared under two conditions, 1) control (media with estradiol, E2) and 2) DHT-treated (E2+DHT).
-The sample data frame can be formed as follows.
+We split the above by the ChIP target so let's focus on the ER samples using that list element.
 
 ```{r samples-er}
 samples$ER <- samples$ER %>% 
@@ -429,8 +434,8 @@ In the final line when creating consensus peaks, we've also mapped each peak to 
 This way we have not only created our consensus peaks, but we've mapped them to the most likely genomic feature.
 Despite how terribly unfashionable pie charts are, they can still be useful for looking at the distribution of regions our peaks have been mapped to.
 
-```{r plot-pi3}
-region_colours <- setNames(hcl.colors(length(regions), rev = TRUE), names(regions))
+```{r plot-pie}
+region_colours <- setNames(viridis(length(regions), direction = -1), names(regions))
 plotPie(consensus_peaks, fill = "region", total_size = 5) +
   scale_fill_manual(values = region_colours)
 ```
@@ -542,7 +547,7 @@ assay(er_se, "logCPM") <- er_se %>%
 Now we can compare our samples both before and after normalisation using `plotAssayDensities()`.
 For before normalisation, can use the `log1p()` transformation on the raw counts.
 
-```{r plot-assay-densities}
+```{r plot-er-densities}
 A <- plotAssayDensities(er_se, assay = "counts", colour = "treat", trans = "log1p") +
   scale_colour_manual(values = treat_colours)
 B <- plotAssayDensities(er_se, assay = "logCPM", colour = "treat") +
@@ -558,7 +563,7 @@ Other technical checks we might like to perform are RLE and PCA.
 Using `plotAssayRle()`, we can check RLE by individual sample as is most common.
 Alternatively, we can visualise RLE by treatment group to pickup any more subtle differences between treatments.
 
-```{r plot-assay-rle}
+```{r plot-er-rle}
 A <- plotAssayRle(er_se, "logCPM", fill = "treat") +
   scale_fill_manual(values = treat_colours)
 B <- plotAssayRle(er_se, "logCPM", fill = "treat", by_x = "treat") +
@@ -570,7 +575,7 @@ A + B +
 
 Similarly `plotAssayPCA()` allows for clear data inspection and manipulation as a standard `ggplot` object
 
-```{r plot-assay-pca}
+```{r plot-er-pca}
 plotAssayPCA(er_se, "logCPM", colour = "treat") +
   scale_colour_manual(values = treat_colours)
 ```
@@ -583,7 +588,7 @@ Before we make our decision, we can check to see if there is an overall shift in
 The package `r BiocStyle::Biocpkg("qantro")` [@Hicks2015-ee] can be used for this, and the primary test returned is for the equivalence of medians between groups, returned as the `anovaPval`.
 If H~0~ is accepted under this test, methods such as TMM or RLE may be suitable options.
 
-```{r qtest}
+```{r qtest-er}
 qtest <- quantro(assay(er_se, "logCPM"), groupFactor = er_se$treat)
 qtest
 ```
@@ -731,6 +736,7 @@ The following chunk was executed locally during workshop preparation, and was ab
 ################
 ## Do Not Run ##
 ################
+bam_path <- file.path("~", "extraChIPs_data", "bam")
 rp <- readParam(restrict = seqlevels(sq))
 bfl <- samples %>% 
   keep_at(c("H3K27ac", "input")) %>% 
@@ -744,8 +750,8 @@ bfl <- samples %>%
   )
 h3k27ac_windows <- windowCounts(
   bam.files = c(bfl$H3K27ac, bfl$input),
-  spacing = 60,
-  width = 180,
+  spacing = 80,
+  width = 240,
   ext = 240,
   filter = length(bfl$H3K27ac),
   param = rp
@@ -762,26 +768,27 @@ seqinfo(h3k27ac_windows) <- sq
 h3k27ac_windows
 ```
 
-  class: RangedSummarizedExperiment 
-  dim: 28328559 7 
-  metadata(6): spacing width ... param final.ext
-  assays(1): counts
-  rownames: NULL
-  rowData names(0):
-  colnames(7): SRR8315186 SRR8315187 ... SRR8315191 SRR8315192
-  colData names(7): bam.files totals ... target treat
+    class: RangedSummarizedExperiment 
+    dim: 24028577 7 
+    metadata(6): spacing width ... param final.ext
+    assays(1): counts
+    rownames: NULL
+    rowData names(0):
+    colnames(7): SRR8315186 SRR8315187 ... SRR8315191 SRR8315192
+    colData names(7): bam.files totals ... target treat
   
 Some brief points of note in the above code chunk
 
 - Whilst `exclude_ranges` could be provided in the `discard` argument of the `rp` object, some read extensions do overlap these ranges and the subsequent removal after counting is cleaner.
 - The `BamFileList` contained all 6 samples obtained using H3K27ac as the ChIP target, but also the *input sample*. An input samples are commonly used in ChIP-Seq and represent the background signal for each range, as may be obtained with an untargeted IgG precipitation.
-- There are no rules for the window sizes and spacing. Here, a window size of 180bp was chosen with a spacing of 60bp to ensure each nucleotide is covered by 3 windows
+- There are no rules for the window sizes and spacing. Here, a window size of 240bp was chosen with a spacing of 80bp to ensure each nucleotide is covered by 3 windows
 - The fragment size was set using the `macs2` log files, as for the ER fragment size
 - The returned `Seqinfo` element of the `SummarizedExperiment` may contain sequences in a different order to the reference `sq` object being used for this entire workflow and there are two lines included after counting to ensure downstream compatibility with other objects
 
 ## Discarding Uninformative Windows
 
-Now that we have alignments for >28m sliding windows across the entire genome, we might like to discard windows which are unlikely to contain H3K27ac signal.
+Now that we have alignments for >20m sliding windows across the entire genome, we might like to discard windows which are unlikely to contain H3K27ac signal.
+This step is analagous to the exclusion of undetectable genes in RNA-Seq.
 Performing statistical testing on these windows will lead to multiple false positives and will also be a waste of computational effort.
 Once again, there are no set rules for determining a window to contain signal or not, and one possible option would be to use the function `dualFilter()` which assesses the signal in each window for being suitably higher than the input signal, and above a signal floor.
 In addition, this uses a very simple approach by taking a set of 'guide ranges' thought to contain true H3K27ac signal.
@@ -801,10 +808,280 @@ h3k27ac_guides <- makeConsensus(h3k27ac_peaks)
 h3k27ac_se <- dualFilter(
   x = h3k27ac_windows, bg = "SRR8315192", ref = h3k27ac_guides, q = 0.75
 )
+write_rds(h3k27ac_se, here::here("inst/extdata/counts/h3k27ac_se.rds"), compress = "gz")
 ```
 
-This step will scan all bam files and can also be highly demanding computationally and time consuming.
-This is the only step which could not be run on a 16Gb laptop, and was instead run on a high-memory server.
+This step is the most memory intensive and was completed successfully on a laptop with 16Gb RAM, but only after increasing Swap memory to 4Gb and shutting down all other software.
+The windows retained after this filtering step have been provided with the workshop, so we can side-step the computational challenges for now.
 
+```{r h3k27ac_se}
+h3k27ac_se <- system.file(
+  "extdata/counts", "h3k27ac_se.rds", package = "extraChIPsWorkshop"
+) |> read_rds()
+assay(h3k27ac_se, "logCPM") <- h3k27ac_se %>%
+  cpm(log = TRUE, lib.size = h3k27ac_se$totals) %>% 
+  set_rownames(rownames(h3k27ac_se)) 
+h3k27ac_se
+```
+
+By applying this filter we have discarded the vast majority of sliding windows based on the decision that there is no true ChIP signal associated with them.
+Of the original 24m windows, only `r scales::comma(nrow(h3k27ac_se))` were retained as being likely to contain true H3K27ac signal.
+Multiple alternate strategies are also implemented in `r BiocStyle::Biocpkg("csaw")` [@Lun2016-cs] if preferred.
+
+One again, we can inspect our counts, as we did for fixed-width windows.
+Given this is a much larger object than for ER, we can tell `plotAssayDensities()` to downsample to only 100,000 windows using `n_max` which will speed up plotting without much information loss, given that neighbouring windows will be highly correlated.
+
+```{r plot-h3k-densities}
+A <- plotAssayDensities(h3k27ac_se, trans = "log1p", colour = "treat", n_max = 1e5) +
+  scale_colour_manual(values = treat_colours)
+B <- plotAssayDensities(h3k27ac_se, assay = "logCPM", colour = "treat", n_max = 1e5) +
+  scale_colour_manual(values = treat_colours)
+A + B + plot_layout(axes = "collect", guides = "collect")
+```
+
+```{r plot-h3k-rle}
+A <- plotAssayRle(h3k27ac_se, "logCPM", fill = "treat", n_max = 1e5) +
+  scale_fill_manual(values = treat_colours)
+B <- plotAssayRle(h3k27ac_se, "logCPM", fill = "treat", by_x = "treat", n_max = 1e5) +
+  scale_fill_manual(values = treat_colours)
+A + B + 
+  plot_layout(guides = "collect", axes = "collect", widths = c(2, 1)) +
+  plot_annotation(tag_levels = "A")
+```
+
+```{r plot-h3k-pca}
+plotAssayPCA(h3k27ac_se, "logCPM", colour = "treat", n_max = 1e5) +
+  scale_colour_manual(values = treat_colours)
+```
+
+## Normalisation
+
+Once again, normalisation will be required in preparation for differential signal analysis, and the above figures gives some confidence that there are no global differences between treatment conditions.
+Once again, we can test this formally `quantro()`
+
+
+```{r qtest-h3k}
+qtest <- quantro(assay(h3k27ac_se, "logCPM"), groupFactor = h3k27ac_se$treat)
+qtest
+```
+
+Once again, the `anovaPvalue` is >> 0.05 and as such method like TMM and RLE are plausible options.
+For the purposes of demonstration, let's use an alternative method which uses Smooth Quantile Normalisation [@Hicks2018-uw].
+This method normalises within treatment groups as well as across the complete dataset, using a set of weights across the range of values, and may even be viable when the `qtest` is less compelling.
+
+Let's normalise the logCPM values, then use these for differential signal analysis using `limma-trend` [@Law2014-xq].
+
+```{r}
+qs <- assay(h3k27ac_se, "logCPM") %>% 
+  qsmooth(group_factor = h3k27ac_se$treat)
+assay(h3k27ac_se, "qsmooth") <- qsmoothData(qs)
+```
+
+```{r}
+qsmoothPlotWeights(
+    qs, xLab = "Quantiles", yLab = "Weights", mainLab = "QSmooth Weights"
+  )
+```
+
+```{r}
+A <- plotAssayDensities(h3k27ac_se, assay = "logCPM", colour = "treat", n_max = 1e5) +
+  scale_colour_manual(values = treat_colours)
+B <- plotAssayDensities(h3k27ac_se, assay = "qsmooth", colour = "treat", n_max = 1e5) +
+  scale_colour_manual(values = treat_colours)
+A + B + plot_layout(axes = "collect", guides = "collect")
+```
+
+```{r}
+plotAssayPCA(h3k27ac_se, assay = "qsmooth", colour = "treat", n_max = 1e5) +
+  scale_colour_manual(values = treat_colours)
+```
+
+## DSA With Sliding Windows
+
+```{r}
+X <- model.matrix(~treat, data = colData(h3k27ac_se))
+h3k27ac_diffsig <- h3k27ac_se %>% 
+  fitAssayDiff(
+    assay = "qsmooth", design = X, norm = "none", asRanges = TRUE, 
+    method = "lt"
+  ) %>% 
+  mergeByHMP(hm_pre = "", min_win = 3) %>% 
+  addDiffStatus(sig_col = "PValue_fdr", drop = TRUE) %>% 
+  mutate(
+    region = bestOverlap(., regions) %>% fct(names(regions))
+  ) %>% 
+  mapByFeature(genes = split_gtf$gene, prom = regions$promoter)
+table(h3k27ac_diffsig$status)
+```
+
+```{r}
+h3k27ac_diffsig %>% arrange(PValue)
+```
+
+```{r h3k-ma}
+h3k27ac_diffsig %>% 
+  as_tibble() %>% 
+  mutate(width_kb = n_windows * 240 / 1e3) %>% 
+  arrange(desc(PValue)) %>% 
+  ggplot(aes(logCPM, logFC)) +
+  geom_point(
+    aes(colour = status, size = width_kb), 
+    alpha = 0.8
+  ) +
+  geom_smooth(se = FALSE) +
+  geom_label_repel(
+    aes(colour = status, label = gene_name),
+    data = . %>% 
+      arrange(desc(abs(logFC))) %>% 
+      dplyr::filter(PValue_fdr < 0.05) %>% 
+      dplyr::slice(1, .by = c(region, status)) %>% 
+      mutate(gene_name = map_chr(gene_name, paste, collapse = "; ")),
+    show.legend = FALSE, fontface = "italic", alpha = 0.7
+  ) +
+  facet_wrap(~region) +
+  scale_colour_manual(values = status_colours) +
+  theme(
+    legend.position = "inside",
+    legend.position.inside = c(5/6, 1/4)
+  )
+```
+
+```{r h3k-volcano}
+h3k27ac_diffsig %>% 
+  as_tibble() %>% 
+  mutate(width_kb = n_windows * 240 / 1e3) %>% 
+  arrange(desc(PValue)) %>% 
+  ggplot(aes(logFC, -log10(PValue))) +
+  geom_point(aes(colour = status, size = width_kb), alpha = 0.8) +
+  geom_label_repel(
+    aes(colour = status, label = gene_name), 
+    data = . %>% 
+      arrange(PValue) %>%
+      dplyr::filter(PValue_fdr < 0.05) %>% 
+      dplyr::slice(1:2, .by = c(region, status)) %>% 
+      mutate(gene_name = map_chr(gene_name, paste, collapse = "; ")),
+    show.legend = FALSE, fontface = "italic", alpha = 0.7
+  ) +
+  facet_wrap(~region) +
+  scale_colour_manual(values = status_colours) +
+  theme(
+    legend.position = "inside",
+    legend.position.inside = c(5/6, 1/4)
+  )
+```
+
+
+```{r}
+h3k27ac_diffsig %>% 
+  plotSplitDonut(
+    inner = "region", outer = "status", 
+    inner_palette = region_colours, outer_palette = status_colours,
+    inner_glue = "{str_wrap(.data[[inner]], 15)}\n{comma(n)} ({percent(p,0.1)})",
+    inner_label_alpha = 0.8, inner_min_p = 2107 / length(.),
+    outer_glue = "{comma(n)} {.data[[outer]]}", 
+    outer_label = "text", outer_min_p = 7 / length(.),
+    outer_label_colour = "palette", outer_rotate = TRUE, outer_legend = FALSE,
+    layout = c(main = area(1, 1, 20, 20), lg1 = area(18, 18), lg2 = area(2, 18))
+  ) 
+```
+
+# Integration Between Targets
+
+```{r}
+both_diffsig <- GRangesList(
+  ER = er_diffsig %>% 
+    select(logFC, logCPM, PValue, FDR, status, region, starts_with("gene")),
+  H3K27ac = h3k27ac_diffsig %>% 
+    select(
+      logFC, logCPM, PValue = PValue, FDR = PValue_fdr, status, region, 
+      starts_with("gene")
+    )
+) 
+combined_status_colours <- c(
+  setNames(status_colours, paste("ER", names(status_colours))),
+  setNames(status_colours, paste("H3K27ac", names(status_colours)))
+)
+grp_colours <- c(
+  "yellow3", "purple4", # ER Unchanged
+  "lightgreen", "forestgreen", # H3K27ac Unchanged
+  "#99999955", "royalblue2", "red3"# Both Unchanged/Decreased/Increased
+) 
+both_diffsig %>% 
+  plotPairwise(
+    "logFC", colour = "status", label = "gene_name", label_alpha = 0.8
+  ) +
+  geom_hline(yintercept = 0, colour = "grey30") +
+  geom_vline(xintercept = 0, colour = "grey30") +
+  scale_colour_manual(values = grp_colours) +
+  scale_fill_manual(values = combined_status_colours) +
+  guides(fill = "none") +
+  theme(
+    legend.position = "bottom",
+    ggside.axis.text.x.bottom = element_text(angle = 90, vjust = 0.25)
+  ) 
+```
+
+
+```{r}
+both_diffsig %>% 
+  mapGrlCols(
+    var = c("status", "region", "logFC"), collapse = "gene_name", 
+    method = "coverage", p = 1
+  ) %>% 
+  as_tibble() %>% 
+  filter(
+    str_detect(ER_region, "promoter"),
+    if_all(ends_with("status"), \(x) str_detect(x, "Increased"))
+  ) %>% 
+  dplyr::select(
+    Range = range, ER = ER_logFC, H3K27ac = H3K27ac_logFC, Gene = gene_name
+  ) %>% 
+  distinct(pick(everything())) 
+```
+
+```{r plot-hfgc, eval = FALSE}
+gr <- both_diffsig %>% 
+  mapGrlCols(var = "status", collapse = "gene_name", include = TRUE) %>% 
+  filter(grepl("SEC14L2", gene_name), ER_status == "Increased") %>% 
+  as_tibble() %>%
+  pull("ER") %>% 
+  unique() %>% 
+  GRanges(seqinfo = sq)
+data("grch37.cytobands")
+bw_path <- file.path("~", "extraChIPs_data", "macs2")
+cov_bwfl <- list(
+  ER = file.path(bw_path, "ERa", glue("{treat_levels}_merged_treat_pileup.bw")),
+  H3K27ac = file.path(bw_path, "H3K27ac", glue("{treat_levels}_merged_treat_pileup.bw"))
+) %>% 
+  lapply(setNames, treat_levels) %>% 
+  lapply(BigWigFileList)
+cov_colours <- lapply(cov_bwfl, \(x) treat_colours)
+diffsig_status = list(
+  ER = er_diffsig %>% splitAsList(.$status) %>% endoapply(granges),
+  H3K27ac = h3k27ac_diffsig %>% splitAsList(.$status) %>% endoapply(granges)
+)
+trans_models <- split_gtf$exon %>% 
+  select(
+    type, gene = gene_id, exon = exon_id, transcript = transcript_id,
+    symbol = gene_name
+  ) %>% 
+  mutate(
+    gene = str_extract(gene, "ENSG[0-9]+"),
+    exon = str_extract(exon, "ENSE[0-9]+"),
+    transcript = str_extract(transcript, "ENST[0-9]+")
+  )
+plotHFGC(
+  gr, zoom = 120, shift = -2.6e3,
+  features = regions, featcol = region_colours,
+  featsize = 2, featstack = "dense", featname = "Region",
+  genes = trans_models, genecol = "lightgoldenrod3", collapseTranscripts = FALSE,
+  coverage = cov_bwfl, linecol = cov_colours,
+  annotation = diffsig_status, annotcol = status_colours,
+  cytobands = grch37.cytobands,  
+  rotation.title = 90, title.width = 1, fontsize = 10, cex.axis = 0.9
+)
+```
+
+![](figures/plot_hfgc.png)
 
 # References
