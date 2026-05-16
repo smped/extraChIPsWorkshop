@@ -144,7 +144,8 @@ After loading, add the seqinfo object to the returned GenomicRanges object to en
 
 ```{r load-gtf}
 f <- system.file(
-  'extdata/annotation', 'gencode.v44lift37.reduced.gtf.gz', package = "extraChIPsWorkshop"
+  'extdata/annotation', 'gencode.v44lift37.reduced.gtf.gz', 
+  package = "extraChIPsWorkshop"
 )
 gtf <- import.gff(f)
 seqinfo(gtf) <- sq
@@ -225,6 +226,28 @@ Some people may prefer to use the `r BiocStyle::CRANpkg("conflicted")` package t
 
 # Differential Signal Analysis Using Fixed Width Peaks
 
+```{r}
+treat_levels <- c("E2", "E2DHT")
+samples <- tibble(
+  id = paste0("SRR83151", seq(80, 92)),
+  target = case_when(
+    id %in% paste0("SRR83151", seq(80, 85)) ~ "ER",
+    id %in% paste0("SRR83151", seq(86, 91)) ~ "H3K27ac",
+    id == "SRR8315192" ~ "input"
+  ),
+  treat = case_when(
+    id %in% paste0("SRR83151", seq(80, 82)) ~ "E2",
+    id %in% paste0("SRR83151", seq(86, 88)) ~ "E2",
+    id %in% paste0("SRR83151", seq(83, 85)) ~ "E2DHT",
+    id %in% paste0("SRR83151", seq(89, 91)) ~ "E2DHT",
+    TRUE ~ NA
+  ) %>% 
+    factor(treat_levels)
+) %>% 
+  split(.$target)
+```
+
+
 ## Loading and Inspecting Peaks
 
 Now that we've prepared the external data, we can move to the peaks we're actually interested in.
@@ -232,13 +255,10 @@ The first set of peaks, we'll work with are associated with the Estrogen Recepto
 The sample data frame can be formed as follows.
 
 ```{r samples-er}
-treat_levels <- c("E2", "E2DHT")
-samples_er <- tibble(
-  id = paste0("SRR831518", seq(0, 5)),
-  target = "ER",
-  treat = factor(rep(treat_levels, each = 3), levels = treat_levels),
-  file = paste0(id, "_peaks.narrowPeak"),
-  path = system.file("extdata/peaks", file, package = "extraChIPsWorkshop")
+samples$ER <- samples$ER %>% 
+  mutate(
+    peak_file = paste0(id, "_peaks.narrowPeak.gz"),
+    peak_path = system.file("extdata/peaks", peak_file, package = "extraChIPsWorkshop")
 )
 ```
 
@@ -248,7 +268,7 @@ The final column `peak` denoted the position within the provided range, where th
 Let's just look at the first file
 
 ```{r import-peaks1}
-importPeaks(samples_er$path[1])
+importPeaks(samples$ER$peak_path[1])
 ```
 
 Here we can see peaks from a scaffold loaded first, which we haven't included in our `seqinfo` object.
@@ -260,9 +280,9 @@ Finally, if importing `.narrowPeak` files we can optionally set the argument `ce
 
 ```{r er-peaks}
 er_peaks <- importPeaks(
-  samples_er$path, blacklist = exclude_ranges, seqinfo = sq, centre = TRUE
+  samples$ER$peak_path, blacklist = exclude_ranges, seqinfo = sq, centre = TRUE
 )
-names(er_peaks) <- str_remove_all(names(er_peaks), "_peaks.narrowPeak")
+names(er_peaks) <- samples$ER$id
 er_peaks
 ```
 
@@ -281,7 +301,7 @@ This figure shows a boxplot for each element, with the total number of peaks sho
 The 10th percentile for all values across all elements is also shown by default as a blue dashed line.
 
 We can easily modify this to show any of the other columns, such as the `score` column.
-The function enables multiple geoms (`r pander::pander(formals(plotGrlCol)$geom)`), and if we pass the samples data.frame (`df = samples_er`), we can specify which column matches the names of each `GRangesList` element (`.id = "id"`).
+The function enables multiple geoms (`r pander::pander(formals(plotGrlCol)$geom)`), and if we pass the samples data.frame (`df = samples$ER`), we can specify which column matches the names of each `GRangesList` element (`.id = "id"`).
 As a result, additional aesthetics, like `fill` can be added using this data frame.
 Labels and horizontal lines can also be omitted if preferred, in any combination.
 
@@ -290,7 +310,7 @@ treat_colours <- setNames(c("steelblue", "red3"), treat_levels)
 er_peaks %>% 
   plotGrlCol(
     var = "score", geom = "violin", quantile.linetype = 1, quantiles = 0.5, 
-    .id = "id", df = samples_er, fill = "treat", 
+    .id = "id", df = samples$ER, fill = "treat", 
     ## Setting the size of the quantile to NULL will hide the label whilst 
     ## showing the line. Here, we're showing the 50th percentile.
     q = 0.5, q_size = NULL, 
@@ -345,7 +365,7 @@ We can take advantage of piping to do this *on-the-fly* just to inspect the outp
 
 ```{r e2-consensus}
 er_peaks %>% 
-  subset(samples_er$treat == "E2") %>% 
+  subset(samples$ER$treat == "E2") %>% 
   makeConsensus(p = 2/3)
 ```
 
@@ -356,7 +376,7 @@ In addition, we can keep any additional columns, such as the centre positions we
 
 ```{r e2-consensus-centre}
 er_peaks %>% 
-  subset(samples_er$treat == "E2") %>% 
+  subset(samples$ER$treat == "E2") %>% 
   makeConsensus(p = 2/3, var = "centre")
 ```
 
@@ -364,7 +384,7 @@ This will be returned as a list column, so taking the average may be a wise move
 
 ```{r e2-consensus-centre-mean}
 er_peaks %>% 
-  subset(samples_er$treat == "E2") %>% 
+  subset(samples$ER$treat == "E2") %>% 
   makeConsensus(p = 2/3, var = "centre") %>% 
   mutate(centre = map_dbl(centre, mean))
 ```
@@ -375,7 +395,7 @@ This can utilise HiC (or HiChIP) interactions to confidently map long-range inte
 
 ```{r consensus-peaks}
 consensus_peaks <- er_peaks %>% 
-  split(samples_er$treat) %>% 
+  split(samples$ER$treat) %>% 
   lapply(
     \(peaks) {
       peaks %>% 
@@ -415,7 +435,7 @@ plotPie(consensus_peaks, fill = "region", total_size = 5) +
   scale_fill_manual(values = region_colours)
 ```
 
-This figure is highly customisable, but for now let's move on.
+This figure is highly customisable, with labels able to be modified using `glue` syntax, but for now let's move on.
 
 ## DSA With Fixed-Width Peaks
 
@@ -440,12 +460,16 @@ In this way we've created a suitable representation of the consensus peaks on wh
 It's important to note that the peaks of interest are the consensus peaks, these are simply a statistically useful representation of them on which we can perform our analysis.
 
 ```{r export-er-se, eval = FALSE}
+################
 ## DO NOT RUN ##
-## This is my code for preparing the counts. 
+################
+## This is my code for preparing the counts and requires 6 bam files
 ## Counts will be loaded in the next chunk
-bfl <- here::here("data", "bam", paste0(samples_er$id, ".bam")) %>% 
+## Please see inst/scripts/data_setup.R for details of the download
+bam_path <- file.path("~", "extraChIPs_data", "bam")
+bfl <- file.path(bam_path, paste0(samples$ER$id, ".bam")) %>% 
   BamFileList()
-names(bfl) <- samples_er$id
+names(bfl) <- samples$ER$id
 rp <- readParam(pe = "none")
 er_se <- regionCounts(bfl, centred_peaks, ext = 175, param = rp)
 seqinfo(er_se) <- sq
@@ -455,21 +479,22 @@ colData(er_se) <- colData(er_se) %>%
     bam.files = basename(bam.files)
   ) %>% 
   left_join(
-    dplyr::select(samples_er, id, target, treat), by = "id"
+    dplyr::select(samples$ER, id, target, treat), by = "id"
   )
 write_rds(er_se, here::here("inst/extdata/counts/er_se.rds"), compress = "gz")
 ```
 
+**NB: Counts were parsed from bam files using a standard laptop running Ubuntu with 16Gb RAM and the output saved within the workshop package using the above chunk.
+We will load these pre-pepared counts in the next chunk.**
+
 The next step after defining the peaks would be to load the counts directly from the bam file containing the alignments.
 The code chunk above is how counts were prepared for this workshop noting the following steps
 
-1. Define a `BamFileList` then set the names to match the `id` column in `samples_er`
+1. Define a `BamFileList` then set the names to match the `id` column in `samples$ER`
 2. Use `regionCounts()` from the package `r BiocStyle::Biocpkg("csaw")` [@Lun2016-cs], first setting any key parameters for reading alignments.
 Here, the reads were single-end, so we set `pe = "none"`. The reads were extended by 175 bp as is common for ChIP-seq as this was the estimated fragment length from the macs2 output
 3. The `colData` element of the returned `SummarizedExperiment` was modified using `mutate()` and `left_join()` from `r BiocStyle::Biocpkg("DFplyr")` to incorporate the required sample information
 
-Counts were parsed from bam files using a standard laptop running Ubuntu with 16Gb RAM and the output saved withi nthe workshop package.
-In order to load the pre-pepared counts for this workshop, simply run the following code, then inspect the rowData and colData.
 
 ```{r er-se}
 f <- system.file("extdata/counts/er_se.rds", package = "extraChIPsWorkshop")
@@ -477,6 +502,23 @@ er_se <- read_rds(f)
 rowRanges(er_se)
 colData(er_se)
 ```
+
+Note that the value provided in the `totals` column *corresponds to the total number of reads in the original bam files*, and that only a small fraction of the alignments fall within the defined fixed-width peaks.
+There is a QC metric "Fraction of Reads in Peaks" (FRIP) which is commonly used in ChIP-QC which is used to assess comparative quality between samples.
+See [here](https://ishaaq34.github.io/chipseq-tutorial-readthedocs/12_frip_quality_metrics/) for a good tutorial, and this is more formally calculated by many tools which should be incorporated into data preparation workflows, as suggested by the ENCODE consortium [@Landt2012-tn]
+
+Note however, that we're counting fixed-with, centred peaks here so these counts will be a slight undercount of the true values.
+The true values were estimated during sample preparation with an example [here](https://github.com/smped/PRJNA509779/blob/main/output/macs2/SRR8315180/SRR8315180_frip.tsv) as produced by the [workflow used for data preparation](https://github.com/smped/PRJNA509779/blob/main/workflow/scripts/get_frip.R).
+
+```{r er-frip}
+colData(er_se) %>% 
+  as_tibble() %>% 
+  mutate(
+    counted = assay(er_se, "counts") |> colSums(),
+    FRIP = counted / totals
+  )
+```
+
 
 ### Normalisation
 
@@ -640,7 +682,7 @@ er_diffsig %>%
     outer_palette = status_colours,
     inner_glue = "{str_wrap(.data[[inner]], 15)}\n{comma(n)} ({percent(p,0.1)})",
     outer_glue = "{comma(n)} {.data[[outer]]}",
-    inner_label_alpha = 0.6, inner_label_colour = "white",
+    inner_label_alpha = 0.6, 
     outer_label_colour = "palette", outer_rotate = TRUE,
     outer_label = "text", outer_min_p = 0, outer_nudge_r = 0.6
   )
@@ -660,7 +702,7 @@ H3K27ac signal also doesn't change consistently across the entire region, but wi
 
 
 ```{r load-h3k27ac}
-f <- paste("H3K27ac", c("E2", "E2DHT"), "merged.narrowPeak", sep = "_")
+f <- paste("H3K27ac", c("E2", "E2DHT"), "merged_peaks.narrowPeak.gz", sep = "_")
 h3k27ac_peaks <- system.file("extdata/peaks", f, package = "extraChIPsWorkshop") |>
   importPeaks(
     seqinfo = sq, blacklist = exclude_ranges, 
@@ -690,14 +732,16 @@ The following chunk was executed locally during workshop preparation, and was ab
 ## Do Not Run ##
 ################
 rp <- readParam(restrict = seqlevels(sq))
-bfl <- list(
-  H3K27ac = here::here("data", "bam", paste0("SRR83151", 86:91, ".bam")) %>% 
-    BamFileList() %>% 
-    setNames(str_remove(names(.), ".bam")),
-  input = here::here("data", "bam", "SRR8315192.bam") %>% 
-    BamFileList() %>% 
-    setNames("SRR8315192")
-)
+bfl <- samples %>% 
+  keep_at(c("H3K27ac", "input")) %>% 
+  lapply(
+    \(df){
+      f <- file.path(bam_path, paste0(df$id, ".bam"))
+      bams <- BamFileList(f)
+      names(bams) <- df$id
+      bams
+    }
+  )
 h3k27ac_windows <- windowCounts(
   bam.files = c(bfl$H3K27ac, bfl$input),
   spacing = 60,

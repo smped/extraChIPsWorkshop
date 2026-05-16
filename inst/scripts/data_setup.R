@@ -31,7 +31,7 @@ library(Rsamtools)
 library(rtracklayer)
 library(extraChIPs)
 library(plyranges)
-data_path <- file.path("~", "extraChips_data")
+data_path <- file.path("~", "extraChIPs_data")
 if (!dir.exists(data_path)) dir.create(data_path)
 bfc <- BiocFileCache(data_path, ask = FALSE)
 
