@@ -3,7 +3,7 @@ title: "Workshop Demonstrating extraChIPs"
 author: Stevie Pederson^[Black Ochre Data Labs, The Kids Research Institute Australia stevie.pederson@thekids.org.au]
 bibliography: ../inst/references.bib
 output: 
-  html_vignette:
+  BiocStyle::html_document:
     toc: true
     toc_float: true
     number_sections: true
