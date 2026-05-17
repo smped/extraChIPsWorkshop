@@ -2,8 +2,9 @@
 title: "Workshop Demonstrating extraChIPs"
 author: Stevie Pederson^[Black Ochre Data Labs, The Kids Research Institute Australia stevie.pederson@thekids.org.au]
 bibliography: ../inst/references.bib
-output: 
-  BiocStyle::html_document:
+output:
+  rmarkdown::html_document:
+    theme: flatly
     toc: true
     toc_float: true
     number_sections: true
@@ -65,7 +66,8 @@ Whilst the primary focus will be on the usage of `extraChIPs`, additional import
 - `r BiocStyle::Biocpkg("qsmooth")` [@Hicks2018-uw]
 - `r BiocStyle::Biocpkg("quantro")` [@Hicks2015-ee]
 - `r BiocStyle::Biocpkg("plyranges")` [@Lee209-gb]
-<!-- - `r BiocStyle::Biocpkg("DiffBind")` and `r BiocStyle::Biocpkg("csaw")` -->
+- `r BiocStyle::Biocpkg("csaw")` [@Lun2016-cs]
+- `r BiocStyle::CRANpkg("tidyverse")` [@Wickham2019-tv]
 
 ```{r load-packages}
 library(tidyverse)
