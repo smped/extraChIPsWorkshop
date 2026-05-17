@@ -1151,7 +1151,7 @@ both_mapped_status %>%
     Range = range, ER = ER_logFC, H3K27ac = H3K27ac_logFC, Gene = gene_name
   ) %>% 
   distinct(pick(everything())) %>% 
-  pander()
+  pander(justify = "lrrl")
 ```
 
 As we can see, *FLNB* and *PDZD2* map the same ER peak to two H3K27ac regions, suggesting these may accour in a valley between two H3K27ac peaks.
