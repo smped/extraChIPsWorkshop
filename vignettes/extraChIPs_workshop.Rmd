@@ -2,7 +2,11 @@
 title: "Workshop Demonstrating extraChIPs"
 author: Stevie Pederson^[Black Ochre Data Labs, The Kids Research Institute Australia stevie.pederson@thekids.org.au]
 bibliography: ../inst/references.bib
-output: rmarkdown::html_vignette
+output: 
+  html_vignette:
+    toc: true
+    toc_float: true
+    number_sections: true
 vignette: >
   %\VignetteIndexEntry{An Example Workshop}
   %\VignetteEngine{knitr::rmarkdown}
@@ -80,6 +84,7 @@ library(patchwork)
 library(ggrepel)
 library(glue)
 library(viridisLite)
+library(pander)
 theme_set(theme_bw())
 ```
 
@@ -1146,7 +1151,7 @@ both_mapped_status %>%
     Range = range, ER = ER_logFC, H3K27ac = H3K27ac_logFC, Gene = gene_name
   ) %>% 
   distinct(pick(everything())) %>% 
-  print(n = 35)
+  pander()
 ```
 
 As we can see, *FLNB* and *PDZD2* map the same ER peak to two H3K27ac regions, suggesting these may accour in a valley between two H3K27ac peaks.
