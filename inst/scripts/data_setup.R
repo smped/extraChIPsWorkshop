@@ -98,4 +98,23 @@ file.path(data_path, "macs2") |>
   ) |>
   invisible()
 
+#### Prepare the BigWig objects ####
+gr <- GRanges("chr22:30760000-30830000")
+bwfl <- list.files(
+  data_path, pattern = ".bw$", recursive = TRUE, full.names = TRUE
+) %>%
+  BigWigFileList()
+names(bwfl) <- bwfl %>%
+  path() %>%
+  str_remove_all(".+macs2/") %>%
+  str_replace_all("/", "_") %>%
+  str_remove("_treat")
+cov <- lapply(bwfl, import.bw, which = gr)
+## And the export itself
+extdata <- here::here("inst", "extdata", "bigwig")
+if (!dir.exists(extdata)) dir.create(extdata, recursive = TRUE)
+for (i in seq_along(cov)) {
+  f <- file.path(extdata, names(cov)[[i]])
+  export.bw(cov[[i]], f)
+}
 

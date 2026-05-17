@@ -859,31 +859,37 @@ plotAssayPCA(h3k27ac_se, "logCPM", colour = "treat", n_max = 1e5) +
 Once again, normalisation will be required in preparation for differential signal analysis, and the above figures gives some confidence that there are no global differences between treatment conditions.
 Once again, we can test this formally `quantro()`
 
-
 ```{r qtest-h3k}
 qtest <- quantro(assay(h3k27ac_se, "logCPM"), groupFactor = h3k27ac_se$treat)
 qtest
 ```
 
-Once again, the `anovaPvalue` is >> 0.05 and as such method like TMM and RLE are plausible options.
-For the purposes of demonstration, let's use an alternative method which uses Smooth Quantile Normalisation [@Hicks2018-uw].
-This method normalises within treatment groups as well as across the complete dataset, using a set of weights across the range of values, and may even be viable when the `qtest` is less compelling.
+Once again, the `anovaPvalue` is >> 0.05 and we should accept H~0~, that there is no difference in group medians.
+This can be interpreted to mean that there is no difference overall signal between treatment groups, and as such method like TMM and RLE are plausible options.
+However, for the purposes of demonstration, let's use Smooth Quantile Normalisation (SQN) [@Hicks2018-uw].
+This method normalises within treatment groups as well as across the complete dataset, using a set of weights across the range of values, and may even be viable when the `qtest` is less compelling, such as when our ChIP target exhibits a noticeably different signal distribution between treatment groups.
 
 Let's normalise the logCPM values, then use these for differential signal analysis using `limma-trend` [@Law2014-xq].
 
-```{r}
+```{r qsmooth}
 qs <- assay(h3k27ac_se, "logCPM") %>% 
   qsmooth(group_factor = h3k27ac_se$treat)
 assay(h3k27ac_se, "qsmooth") <- qsmoothData(qs)
 ```
 
-```{r}
+The primary figure produced by `qsmooth` is to compare weights as a function of signal quantile.
+If the distributions between treatment groups are relatively consistent, these weights will be closer to 1, whereas 0 would indicate different distributions for the relevant signal quantile.
+
+```{r sqn-weights}
 qsmoothPlotWeights(
     qs, xLab = "Quantiles", yLab = "Weights", mainLab = "QSmooth Weights"
   )
 ```
 
-```{r}
+As we can see, the weights are consistently near 1 suggesting that signal distributions were relatively consistent between treatment groups.
+We can compare the effects of SQN with conventional library-size normalisation as used for logCPM values.
+
+```{r sqn-densities}
 A <- plotAssayDensities(h3k27ac_se, assay = "logCPM", colour = "treat", n_max = 1e5) +
   scale_colour_manual(values = treat_colours)
 B <- plotAssayDensities(h3k27ac_se, assay = "qsmooth", colour = "treat", n_max = 1e5) +
@@ -891,14 +897,36 @@ B <- plotAssayDensities(h3k27ac_se, assay = "qsmooth", colour = "treat", n_max =
 A + B + plot_layout(axes = "collect", guides = "collect")
 ```
 
-```{r}
+As might be expected when using a quantile-normalisation-based method, distributions after applying SQN are highly similar.
+For those who've analysed Affymetrix 3' Microarray data, this might appear familiar.
+The relationship between probes and probeset in this technology is somewhat analogous to sliding windows which are eventually summarised by merging overlapping windows.
+
+A quick inspection of the PCA shows a similar pattern to before normalisation
+
+```{r h3k-pca}
 plotAssayPCA(h3k27ac_se, assay = "qsmooth", colour = "treat", n_max = 1e5) +
   scale_colour_manual(values = treat_colours)
 ```
 
 ## DSA With Sliding Windows
 
-```{r}
+Moving to differential signal analysis, when we use sliding windows, we first fit our statistical model on each window as these were determined independently of any peak calling.
+After model fitting, we then merge overlapping windows and need to choose a method for producing summary statistics for each merged window.
+
+The process starts by forming a design matrix followed by multiple steps
+
+1. Model fitting on each window, here using the `qsmooth` assay without any further normalisation, the using the *limma-trend* approach (`method = "lt"`).
+2. Merging overlapping windows returning a summary p-value using the asymptotically-exact `harmonicmeanp` method [@Wilson2019-hm] (`mergeByHMP()`)
+    + returned logFC and logCPM values are weighted averages using the inverse p-values from each window
+    + No prefix is applied to the returned p-value (`hm_pre = ""`)
+    + Merged windows smaller than 3 overlapping sliding windows are discarded (`min_win = 3`)
+3. DSA status is added by incorporating logFC with FDR-adjusted p-values, in the column `Pvalue_fdr`
+4. Our previously defined genomic regions are then mapped to each merged window (`bestOverlap()`)
+5. Each merged window is mapped to the genes in the provided annotations (`mapByFeature()`)
+
+Feel free to run each individual line, or subsets of lines to see what output is produced by each step
+
+```{r fit-h3k27ac}
 X <- model.matrix(~treat, data = colData(h3k27ac_se))
 h3k27ac_diffsig <- h3k27ac_se %>% 
   fitAssayDiff(
@@ -907,26 +935,58 @@ h3k27ac_diffsig <- h3k27ac_se %>%
   ) %>% 
   mergeByHMP(hm_pre = "", min_win = 3) %>% 
   addDiffStatus(sig_col = "PValue_fdr", drop = TRUE) %>% 
-  mutate(
-    region = bestOverlap(., regions) %>% fct(names(regions))
-  ) %>% 
+  mutate(region = bestOverlap(., regions) %>% fct(names(regions))) %>% 
   mapByFeature(genes = split_gtf$gene, prom = regions$promoter)
+arrange(h3k27ac_diffsig, PValue)
+```
+
+In our output:
+
+- The number of sliding windows is returned along with the number considered significant for each direction
+- The `keyval_range` provides the complete range for all raw p-values which were lower than the harmonic-mean p-value, to provide insights as to which specific range showed the most significant treatment effect
+
+
+As well as merging windows using the harmonic-mean p-value, two alternative methods are provided.
+
+1. `mergeByCol()` allows selection of any column to choose a *representative window* for the region, such as the maximum/minimum 'logCPM', or the closest to the mean/median vvalues for that column
+2. `mergeBySig()` wraps multiple functions (`combineTests`, `getBestTest` and `minimalTests`) from `r BiocStyle::Biocpkg("csaw")`, returning output in a manner which is consistent with other functions from `extraChIPs`
+
+Any method directly provided by csaw is also viable for this step.
+
+## Inspection of Results
+
+```{r tabl-h3k27ac}
 table(h3k27ac_diffsig$status)
 ```
 
-```{r}
-h3k27ac_diffsig %>% arrange(PValue)
-```
+As we can see there is a slight bias to regions showing increased signal within the time-frame under analysis.
+This may be indicative of the different mechanisms which underpin the addition or removal of the acetyl group from H3K27, but we should check to see if there is any underlying bias using a classic MA-plot
 
 ```{r h3k-ma}
+h3k27ac_diffsig %>% 
+  as_tibble() %>% 
+  ggplot(aes(logCPM, logFC)) +
+  geom_point(aes(colour = status), alpha = 0.8) +
+  geom_smooth(se = FALSE) +
+  scale_colour_manual(values = status_colours)
+```
+
+Overall, there seems to be a little noise at the low end, but overall the bias appears non-existent across the range of signal.
+Unlike differential gene-expression analysis, we have a much greater range of information we can add to figures like this, so let's create an MA plot showing:
+
+- Results by genomic region
+- Point sizes to indicate the merged window sizes
+- The most extreme merged windows with genes mapped to them
+
+
+```{r h3k-ma-annotated}
 h3k27ac_diffsig %>% 
   as_tibble() %>% 
   mutate(width_kb = n_windows * 240 / 1e3) %>% 
   arrange(desc(PValue)) %>% 
   ggplot(aes(logCPM, logFC)) +
   geom_point(
-    aes(colour = status, size = width_kb), 
-    alpha = 0.8
+    aes(colour = status, size = width_kb), alpha = 0.8
   ) +
   geom_smooth(se = FALSE) +
   geom_label_repel(
@@ -945,6 +1005,10 @@ h3k27ac_diffsig %>%
     legend.position.inside = c(5/6, 1/4)
   )
 ```
+
+Now we can see the most extreme upstream-promoter is associated with *PDZD2*, with very low signal and a smallish window size.
+
+Let's move to a fully annotated set of volcano plots, faceted by region as well
 
 ```{r h3k-volcano}
 h3k27ac_diffsig %>% 
@@ -970,24 +1034,34 @@ h3k27ac_diffsig %>%
   )
 ```
 
+This shows a nice summary of the most significant ranges by region, indicating the size of the impacted region and the most likely target gene.
+Finally, we can show the distribution of changed ranges by the assigned genomic region, noting that there seems to be a slight bias towards H3K27ac-marked ranges within genes, but which do not form any kind of promoter region.
 
-```{r}
+```{r h3k-donut}
 h3k27ac_diffsig %>% 
   plotSplitDonut(
     inner = "region", outer = "status", 
     inner_palette = region_colours, outer_palette = status_colours,
     inner_glue = "{str_wrap(.data[[inner]], 15)}\n{comma(n)} ({percent(p,0.1)})",
-    inner_label_alpha = 0.8, inner_min_p = 2107 / length(.),
-    outer_glue = "{comma(n)} {.data[[outer]]}", 
-    outer_label = "text", outer_min_p = 7 / length(.),
-    outer_label_colour = "palette", outer_rotate = TRUE, outer_legend = FALSE,
-    layout = c(main = area(1, 1, 20, 20), lg1 = area(18, 18), lg2 = area(2, 18))
+    inner_label_alpha = 0.8, 
+    outer_glue = "{comma(n)} {.data[[outer]]}", outer_label = "text", 
+    outer_label_colour = "palette", outer_rotate = TRUE, 
+    outer_min_p = 0.001, outer_legend = FALSE,
   ) 
 ```
 
 # Integration Between Targets
 
-```{r}
+A key question for experiments like this is to identify the relationship between changes in the two ChIP targets, e.g. what's the overall relationship between changes in H3K27ac and ER, and where do they both change enough to achieve statistical significance?
+The function `plotParwise()` takes a named `GRangesList()` of length two, and produces a convenient figure which is information dense.
+First we'll need to 
+
+1. Form the `GRangesList` ensuring column names match exactly
+2. Create a palette of colours showing the *status of each target* as boxplots
+3. Create a palette of colours showing the *combined status of both targets*
+
+```{r plot-pairwise}
+## Form a named GRangesList with identical columns
 both_diffsig <- GRangesList(
   ER = er_diffsig %>% 
     select(logFC, logCPM, PValue, FDR, status, region, starts_with("gene")),
@@ -997,10 +1071,12 @@ both_diffsig <- GRangesList(
       starts_with("gene")
     )
 ) 
+## Define colours for Up/Down/Unchanged/Undetected for both targets individually
 combined_status_colours <- c(
   setNames(status_colours, paste("ER", names(status_colours))),
   setNames(status_colours, paste("H3K27ac", names(status_colours)))
 )
+## Define colours for both targets together
 grp_colours <- c(
   "yellow3", "purple4", # ER Unchanged
   "lightgreen", "forestgreen", # H3K27ac Unchanged
@@ -1021,13 +1097,46 @@ both_diffsig %>%
   ) 
 ```
 
+The top panel shows a boxplot with changes in ER signal for sites where H3K27ac signal is 1) Undetected, 2) Increased, 3) Decreased, or 4) Unchanged.
+The right hand panel shows this in reverse, with distributions of H3K27ac signal shown by ER status.
+The main panel shows the combined status of each overlapping region, noting that point can only be included where both targets were detected.
+If there is a large discrepancy in the widths of ranges between targets, such as for ER and H3K27ac, any H3K27ac range overlapping 2 ER ranges may be shown twice.
 
-```{r}
-both_diffsig %>% 
+Alternatively, we may simply wish to map columns by collapsing into a single GRanges object, and `mapGrlCols()` will find `consensusPeaks()` between targets, using either the union of coverage method, then map the specified columns to the `mcols()` element within the returned object.
+Unlike `plotParwise()`, this step can be performed on a named `GRangesList` with any length.
+
+To see who this works initially, let's map the status (Increased/Decreased/Unchanged), the region assigned to either target and the estimated logFC for each target.
+Additionally, the `gene_name` will be collapsed into a single character vector. 
+
+```{r mapgrlcols}
+both_mapped_status <- both_diffsig %>% 
   mapGrlCols(
     var = c("status", "region", "logFC"), collapse = "gene_name", 
     method = "coverage", p = 1
-  ) %>% 
+  ) 
+both_mapped_status
+```
+
+We can once again call `plotSplitDonut()` to compare the overall behaviour of targets, noting that results here will be restricted to ranges where both targets were detected, as we set `method = "coverage", p = 1` in the above.
+Changing `p = 0` will include regions where only one target is detected, however `NA` values will need to be handled explicitly.
+Here is the basics for a plot using a the minimal inputs.
+Try using the `glue()` syntax to modify labels,, adding colour palettes to the labels, or try rotating the outer labels.
+
+```{r plot-both-donut}
+both_mapped_status %>% 
+  plotSplitDonut(
+    inner = "H3K27ac_status", outer = "ER_status", 
+    inner_palette = status_colours, outer_palette = status_colours,
+    outer_pattern = "Increased|Decreased", outer_min_p = 0
+  )
+```
+
+
+This mapping also makes for easy preparation of lists showing any combination of values we choose.
+Let's take the above, subset to those where ER was mapped to a promoter (or upstream promoter), and where both targets were considered to be increased, returning the associated genes.
+
+```{r tbl-both-up-prom}
+both_mapped_status %>% 
   as_tibble() %>% 
   filter(
     str_detect(ER_region, "promoter"),
@@ -1036,30 +1145,42 @@ both_diffsig %>%
   dplyr::select(
     Range = range, ER = ER_logFC, H3K27ac = H3K27ac_logFC, Gene = gene_name
   ) %>% 
-  distinct(pick(everything())) 
+  distinct(pick(everything())) %>% 
+  print(n = 35)
 ```
 
-```{r plot-hfgc, eval = FALSE}
-gr <- both_diffsig %>% 
-  mapGrlCols(var = "status", collapse = "gene_name", include = TRUE) %>% 
-  filter(grepl("SEC14L2", gene_name), ER_status == "Increased") %>% 
-  as_tibble() %>%
-  pull("ER") %>% 
-  unique() %>% 
-  GRanges(seqinfo = sq)
+As we can see, *FLNB* and *PDZD2* map the same ER peak to two H3K27ac regions, suggesting these may accour in a valley between two H3K27ac peaks.
+We may wish to revisit merging windows to combine these H3K27ac windows.
+In contrast, *DLG5* shows two different ER peaks mapped to a larger H3K27ac range, suggesting two increased binding sites within a larger H3K27ac range.
+
+## Visualisation Using plotHFGC
+
+The range associated with *SEC14L2* appears to show some of the most extreme change for both targets so this might provide a good gene for us to inspect manually.
+The function `plotHFGC()` uses the `Gviz` [Hahne2016-gv] infrastructure to produce figures containing any of **H**iC, **F**eatures, **G**ene Models and **C**overage.
+All layers are optional, and are shown in the listed order (HFGC).
+Given it is a complex plot, let's build it layer by layer
+
+First we'll define the range of interest, which is the promoter associated with increased H3K27ac and ER, and which maps to *SEC14L2*
+Next we'll load the cytogenetic bands included with the package, then simply add our features as defined at the start of the workshop.
+Notice we passing them as `features` with colours defined as `featcol`.
+We'll stack then as `"dense"` to ensure they're collapsed, given there are no overlapping features, then provide the track name "Region".
+Also notice the range we've selected is highlighted in blue by default.
+
+
+```{r plot-hf, fig.show='hide'}
+gr <- filter(both_mapped_status, str_detect(gene_name, "SEC14L2")) 
 data("grch37.cytobands")
-bw_path <- file.path("~", "extraChIPs_data", "macs2")
-cov_bwfl <- list(
-  ER = file.path(bw_path, "ERa", glue("{treat_levels}_merged_treat_pileup.bw")),
-  H3K27ac = file.path(bw_path, "H3K27ac", glue("{treat_levels}_merged_treat_pileup.bw"))
-) %>% 
-  lapply(setNames, treat_levels) %>% 
-  lapply(BigWigFileList)
-cov_colours <- lapply(cov_bwfl, \(x) treat_colours)
-diffsig_status = list(
-  ER = er_diffsig %>% splitAsList(.$status) %>% endoapply(granges),
-  H3K27ac = h3k27ac_diffsig %>% splitAsList(.$status) %>% endoapply(granges)
+plotHFGC(
+  gr, zoom = 120, shift = -2.6e3, cytobands = grch37.cytobands,
+  features = regions, featcol = region_colours,
+  featsize = 2, featstack = "dense", featname = "Region",
 )
+```
+
+Next we might like to include our gene/transcript models.
+`Gviz` requires a little care with how transcript models are specified, so let's match their example data structure exactly, then add it to the above layers.
+
+```{r add-genes, fig.show='hide'}
 trans_models <- split_gtf$exon %>% 
   select(
     type, gene = gene_id, exon = exon_id, transcript = transcript_id,
@@ -1071,17 +1192,74 @@ trans_models <- split_gtf$exon %>%
     transcript = str_extract(transcript, "ENST[0-9]+")
   )
 plotHFGC(
-  gr, zoom = 120, shift = -2.6e3,
+  gr, zoom = 120, shift = -2.6e3, cytobands = grch37.cytobands,
+  features = regions, featcol = region_colours,
+  featsize = 2, featstack = "dense", featname = "Region",
+  genes = trans_models, genecol = "lightgoldenrod3", collapseTranscripts = FALSE,
+)
+```
+
+We won't be including anh HiC Interactions, but now we have the "FG" already provided for the HFGC track order.
+The coverage, is the most important as that will show our ChIP peaks.
+For this, we'll need a BigWigFileList for each ChIP target, which have been prepared before this session.
+Given we have two targets, we'll overlay both treatment groups within the same target on the same track.
+This means two tracks, so a list of length two, with a BigWigFileList in each element.
+Hopefully that makes sense.
+
+```{r cov-bwfl}
+bw_path <- system.file("extdata/bigwig", package = "extraChIPsWorkshop")
+cov_bwfl <- list(
+  ER = file.path(bw_path, glue("ERa_{treat_levels}_merged_pileup.bw")),
+  H3K27ac = file.path(bw_path, glue("H3K27ac_{treat_levels}_merged_pileup.bw"))
+) %>% 
+  lapply(setNames, treat_levels) %>% 
+  lapply(BigWigFileList)
+cov_bwfl
+```
+
+We can also provide a list of colours matching each treatment group.
+Here we have the same treatment groups within each target, but in reality there is no such restriction.
+
+```{r cov-colours}
+cov_colours <- lapply(cov_bwfl, \(x) treat_colours)
+cov_colours
+```
+
+```{r add-cov, fig.show='hide'}
+plotHFGC(
+  gr, zoom = 120, shift = -2.6e3, cytobands = grch37.cytobands,
+  features = regions, featcol = region_colours,
+  featsize = 2, featstack = "dense", featname = "Region",
+  genes = trans_models, genecol = "lightgoldenrod3", collapseTranscripts = FALSE,
+  coverage = cov_bwfl, linecol = cov_colours,
+)
+```
+
+This looks pretty good already, but we can also annotate our coverage to show ranges which were formally considered as Increased, Decreased or Unchanged.
+Let's split each set of results by status, then just coerce to a simple `GRangesList`
+
+```{r diffsig-status}
+diffsig_status = list(
+  ER = er_diffsig %>% splitAsList(.$status) %>% endoapply(granges),
+  H3K27ac = h3k27ac_diffsig %>% splitAsList(.$status) %>% endoapply(granges)
+)
+diffsig_status
+```
+
+As we produce this final figure, we'll also rotate track labels and modify the font sizes a little.
+
+```{r plot-hfgc}
+plotHFGC(
+  gr, zoom = 120, shift = -2.6e3, cytobands = grch37.cytobands,  
   features = regions, featcol = region_colours,
   featsize = 2, featstack = "dense", featname = "Region",
   genes = trans_models, genecol = "lightgoldenrod3", collapseTranscripts = FALSE,
   coverage = cov_bwfl, linecol = cov_colours,
   annotation = diffsig_status, annotcol = status_colours,
-  cytobands = grch37.cytobands,  
   rotation.title = 90, title.width = 1, fontsize = 10, cex.axis = 0.9
 )
 ```
 
-![](figures/plot_hfgc.png)
+This does take a little setup, but once tracks are defined, this can easily be shifted from region to region (maybe modifying the zoom and shift arguments a little) to inspect results for key regions of interest.
 
 # References
