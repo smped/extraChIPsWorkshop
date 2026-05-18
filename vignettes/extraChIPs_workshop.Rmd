@@ -37,7 +37,7 @@ The primary aim is to enable analysis of ChIP-Seq data, and has been developed w
 However, the principles can plausibly be extended to ATAC-Seq data, with a clear caveat around the counting of alignments, which may require more care for ATAC-Seq.
 
 Two different ChIP targets (ER$\alpha$ and H3K27ac) will be analysed using complementary strategies, then a data integration stage performed, highlighting the true capabilities of `r BiocStyle::Biocpkg("extraChIPs")`.
-Both ChIP targets were prepared in the ZR-75-1 breast cancer cell line under control conditions (Estrogen; E2) then supplemented by *dihydrotestosterone* (E2+DHT).
+Both ChIP targets were prepared in the ZR-75-1 breast cancer cell line under control conditions (Estrogen; E2) then supplemented by *dihydro-testosterone* (E2+DHT).
 Raw data is available at https://www.ncbi.nlm.nih.gov/Traces/study/?acc=PRJNA509779&o=acc_s%3Aa with these samples pre-processed using the code at https://github.com/smped/PRJNA509779 [@Pederson-fd].
 
 The original publication containing the detailed biological background is at https://doi.org/10.1038/s41591-020-01168-7 [@Hickey2021-mz]
@@ -168,7 +168,7 @@ Now we have genes annotated, we know where all transcripts begin and end.
 We can use `defineRegions()` to define promoters, upstream promoters, gene-bodies and intragenic regions.
 this will classify every base in the genome defined by the `Seqinfo` object into one of these features.
 
-- By default, promoters are defined as 2500bp upstream & 500 bo downstream from any TSS, although this can easily be changed. 
+- By default, promoters are defined as 2500bp upstream & 500bp downstream from any TSS, although this can easily be changed. 
 Overlapping promoters from multiple transcripts within a gene are merged into larger promoter regions.
 - Similarly upstream promoters are simply defined as being 5000bp upstream from a TSS, excluding the regions already defined as promoters.
 - Setting `intron = FALSE` will define any region within a gene, excluding promoter regions, as a gene body. If `intron = TRUE`, the intragenic regions will be separated into introns and exons.
@@ -206,7 +206,7 @@ bl <- system.file(
 ```
 
 Similarly, each experiment will likely have low-confidence regions where the input sample can be considered as unreliable.
-Today they have been pre-pepared and provided, but the package `r BiocStyle::Biocpkg("GreyListChIP")` can be used for your own experiment by following the provided vignette.
+Today they have been pre-prepared and provided, but the package `r BiocStyle::Biocpkg("GreyListChIP")` can be used for your own experiment by following the provided vignette.
 
 ```{r gl}
 gl <- system.file(
@@ -286,7 +286,7 @@ importPeaks(samples$ER$peak_path[1])
 ```
 
 Here we can see peaks from a scaffold loaded first, which we haven't included in our `seqinfo` object.
-By including this object in the call to `importPeaks` any peaks outside the defined chromsomes will be excluded.
+By including this object in the call to `importPeaks` any peaks outside the defined chromosomes will be excluded.
 This feature makes downstream data integration far simpler.
 
 We can also pass our combination of black- and grey-listed ranges to the argument `blacklist`, as well as using the default setting of sorting the peaks into genomic order (`sort = TRUE`).
@@ -353,14 +353,14 @@ plotOverlaps(
 As we can see, there's a good number of peaks identified in every sample, then a mix of combinations with peaks identified in only one, two, three, four or five samples.
 Only one intersection seems to represent peaks identified exclusively in DHT treated samples.
 This illustrates our challenge nicely!
-We're not going to be looking for peaks where ER is absent/persent in either condition.
+We're not going to be looking for peaks where ER is absent/present in either condition.
 Rather where going to try and find peaks where the *signal changes* after DHT treatment, i.e. Differential Signal Analysis
 
 ## Forming Consensus Peaks
 
 Moving towards differential signal analysis, we need to carefully define the regions, i.e. peaks, we'll use to detect changes in ER binding.
 It's important to recognise the nature of ChIP-Seq signal at this point.
-If we assumed stict diploidy for every genoic region, which is perhaps unrealistic for cell lines, there would be a maximum of 2 DNA fragments able to be pulled down from every cell in the source material.
+If we assumed strict diploidy for every genomic region, which is perhaps unrealistic for cell lines, there would be a maximum of 2 DNA fragments able to be pulled down from every cell in the source material.
 Our combined signal, represents the proportion of possible sites within the source material where the ChIP target can be bound.
 The saturation point would be exactly two DNA fragments from every cell in the sample.
 
@@ -426,7 +426,7 @@ consensus_peaks <- er_peaks %>%
   mapByFeature(genes = split_gtf$gene, prom = regions$promoter)
 ```
 
-Using this process, we've not only created a set of consensus peaks, but we've mapped them to key defined genomic regions and the most likely gene being targeted byt he binding event.
+Using this process, we've not only created a set of consensus peaks, but we've mapped them to key defined genomic regions and the most likely gene being targeted by the binding event.
 
 Again, we can use `plotOverlaps()` to identify peaks unique to either condition, or shared between the two.
 Given there are only two elements to the input `GRangesList`, a VennDiagram will be produced instead of a UpSet plot.
@@ -499,7 +499,7 @@ write_rds(er_se, here::here("inst/extdata/counts/er_se.rds"), compress = "gz")
 ```
 
 **NB: Counts were parsed from bam files using a standard laptop running Ubuntu with 16Gb RAM and the output saved within the workshop package using the above chunk.
-We will load these pre-pepared counts in the next chunk.**
+We will load these pre-prepared counts in the next chunk.**
 
 The next step after defining the peaks would be to load the counts directly from the bam file containing the alignments.
 The code chunk above is how counts were prepared for this workshop noting the following steps
@@ -521,7 +521,7 @@ Note that the value provided in the `totals` column *corresponds to the total nu
 There is a QC metric "Fraction of Reads in Peaks" (FRIP) which is commonly used in ChIP-QC which is used to assess comparative quality between samples.
 See [here](https://ishaaq34.github.io/chipseq-tutorial-readthedocs/12_frip_quality_metrics/) for a good tutorial, and this is more formally calculated by many tools which should be incorporated into data preparation workflows, as suggested by the ENCODE consortium [@Landt2012-tn]
 
-Note however, that we're counting fixed-with, centred peaks here so these counts will be a slight undercount of the true values.
+Note however, that we're counting fixed-with, centered peaks here so these counts will be a slight under-count of the true values.
 The true values were estimated during sample preparation with an example [here](https://github.com/smped/PRJNA509779/blob/main/output/macs2/SRR8315180/SRR8315180_frip.tsv) as produced by the [workflow used for data preparation](https://github.com/smped/PRJNA509779/blob/main/workflow/scripts/get_frip.R).
 
 ```{r er-frip}
@@ -633,7 +633,7 @@ table(er_diffsig$status)
 The standard MA-plot and volcano-plots can be easily produced from these results.
 The following code does make these look a little more complicated, however:
 
-1. The convenience function `as_tibble.GRanges()` is deomnstrated which will coerce the genomic ranges to character vector column whilst returning the mcols element as a tibble alongside the ranges. (Seqinfo is lost in this step)
+1. The convenience function `as_tibble.GRanges()` is demonstrated which will coerce the genomic ranges to character vector column whilst returning the mcols element as a tibble alongside the ranges. (Seqinfo is lost in this step)
 2. The gene-names are manipulated using `map_chr(gene_name, paste, collapse = ";")` to coerce from a list to a character vector, making labelling simpler
 3. Labels are added for the top-ranked peaks by (A) logFC and (B) significance
 
@@ -681,7 +681,7 @@ A + B +
 ```
 
 A breakdown of results by genomic region can also be produced using `plotSplitDonut()`.
-The defaults for this figure are generally quite useable, however the level of customisation provided is considerable.
+The defaults for this figure are generally quite usable, however the level of customisation provided is considerable.
 The following figure is heavily customised using the following options:
 
 1. Setting separate palettes for inner and outer rings
@@ -739,7 +739,7 @@ As can be seen, H3K27ac peaks, even as identified using narrowPeak mode in `macs
 As a result, choosing a suitable fixed-width can be challenging, and using sliding windows may offer a good choice for this type of signal.
 
 `windowCounts()` as provided by `r BiocStyle::Biocpkg("csaw")` [@Lun2016-cs] is very well suited to counting sliding windows, and we'll take advantage of this function here.
-The following chunk was executed locally during workshop preparation, and was able to be run on an Ubuntu latptop with 16Gb RAM, with the SummarizedExperiment `h3k27ac_windows` being 1.02Gb in size using `lobstr::obj_size(h3k27ac_windows)`
+The following chunk was executed locally during workshop preparation, and was able to be run on an Ubuntu laptop with 16Gb RAM, with the SummarizedExperiment `h3k27ac_windows` being 1.02Gb in size using `lobstr::obj_size(h3k27ac_windows)`
 
 ``` r
 ################
@@ -789,7 +789,7 @@ h3k27ac_windows
 Some brief points of note in the above code chunk
 
 - Whilst `exclude_ranges` could be provided in the `discard` argument of the `rp` object, some read extensions do overlap these ranges and the subsequent removal after counting is cleaner.
-- The `BamFileList` contained all 6 samples obtained using H3K27ac as the ChIP target, but also the *input sample*. An input samples are commonly used in ChIP-Seq and represent the background signal for each range, as may be obtained with an untargeted IgG precipitation.
+- The `BamFileList` contained all 6 samples obtained using H3K27ac as the ChIP target, but also the *input sample*. An input samples are commonly used in ChIP-Seq and represent the background signal for each range, as may be obtained with an un-targeted IgG precipitation.
 - There are no rules for the window sizes and spacing. Here, a window size of 240bp was chosen with a spacing of 80bp to ensure each nucleotide is covered by 3 windows
 - The fragment size was set using the `macs2` log files, as for the ER fragment size
 - The returned `Seqinfo` element of the `SummarizedExperiment` may contain sequences in a different order to the reference `sq` object being used for this entire workflow and there are two lines included after counting to ensure downstream compatibility with other objects
@@ -797,7 +797,7 @@ Some brief points of note in the above code chunk
 ## Discarding Uninformative Windows
 
 Now that we have alignments for >20m sliding windows across the entire genome, we might like to discard windows which are unlikely to contain H3K27ac signal.
-This step is analagous to the exclusion of undetectable genes in RNA-Seq.
+This step is analogous to the exclusion of undetectable genes in RNA-Seq.
 Performing statistical testing on these windows will lead to multiple false positives and will also be a waste of computational effort.
 Once again, there are no set rules for determining a window to contain signal or not, and one possible option would be to use the function `dualFilter()` which assesses the signal in each window for being suitably higher than the input signal, and above a signal floor.
 In addition, this uses a very simple approach by taking a set of 'guide ranges' thought to contain true H3K27ac signal.
@@ -838,7 +838,7 @@ Of the original 24m windows, only `r scales::comma(nrow(h3k27ac_se))` were retai
 Multiple alternate strategies are also implemented in `r BiocStyle::Biocpkg("csaw")` [@Lun2016-cs] if preferred.
 
 One again, we can inspect our counts, as we did for fixed-width windows.
-Given this is a much larger object than for ER, we can tell `plotAssayDensities()` to downsample to only 100,000 windows using `n_max` which will speed up plotting without much information loss, given that neighbouring windows will be highly correlated.
+Given this is a much larger object than for ER, we can tell `plotAssayDensities()` to down-sample to only 100,000 windows using `n_max` which will speed up plotting without much information loss, given that neighbouring windows will be highly correlated.
 
 ```{r plot-h3k-densities}
 A <- plotAssayDensities(h3k27ac_se, trans = "log1p", colour = "treat", n_max = 1e5) +
@@ -937,11 +937,12 @@ Feel free to run each individual line, or subsets of lines to see what output is
 
 ```{r fit-h3k27ac}
 X <- model.matrix(~treat, data = colData(h3k27ac_se))
-h3k27ac_diffsig <- h3k27ac_se %>% 
+h3k27ac_diffwin <- h3k27ac_se %>% 
   fitAssayDiff(
     assay = "qsmooth", design = X, norm = "none", asRanges = TRUE, 
     method = "lt"
-  ) %>% 
+  ) 
+h3k27ac_diffsig <- h3k27ac_diffwin %>% 
   mergeByHMP(hm_pre = "", min_win = 3) %>% 
   addDiffStatus(sig_col = "PValue_fdr", drop = TRUE) %>% 
   mutate(region = bestOverlap(., regions) %>% fct(names(regions))) %>% 
@@ -957,7 +958,7 @@ In our output:
 
 As well as merging windows using the harmonic-mean p-value, two alternative methods are provided.
 
-1. `mergeByCol()` allows selection of any column to choose a *representative window* for the region, such as the maximum/minimum 'logCPM', or the closest to the mean/median vvalues for that column
+1. `mergeByCol()` allows selection of any column to choose a *representative window* for the region, such as the maximum/minimum 'logCPM', or the closest to the mean/median values for that column
 2. `mergeBySig()` wraps multiple functions (`combineTests`, `getBestTest` and `minimalTests`) from `r BiocStyle::Biocpkg("csaw")`, returning output in a manner which is consistent with other functions from `extraChIPs`
 
 Any method directly provided by csaw is also viable for this step.
@@ -969,18 +970,23 @@ table(h3k27ac_diffsig$status)
 ```
 
 As we can see there is a slight bias to regions showing increased signal within the time-frame under analysis.
-This may be indicative of the different mechanisms which underpin the addition or removal of the acetyl group from H3K27, but we should check to see if there is any underlying bias using a classic MA-plot
+This may be indicative of the different mechanisms which underpin the addition or removal of the acetyl group from H3K27, but we should check to see if there is any underlying bias using a classic MA-plot.
+However, given the use of inverse p-values for weighting estimates of logFC and logCPM, the best approach is to check using the sliding windows prior to merging.
+The final estimates after merging neighbouring windows may include their own bias as a results of the weighting strategy.
 
 ```{r h3k-ma}
-h3k27ac_diffsig %>% 
+h3k27ac_diffwin %>% 
   as_tibble() %>% 
+  slice_sample(n = 1e5) %>% 
+  addDiffStatus() %>% 
   ggplot(aes(logCPM, logFC)) +
   geom_point(aes(colour = status), alpha = 0.8) +
   geom_smooth(se = FALSE) +
   scale_colour_manual(values = status_colours)
 ```
 
-Overall, there seems to be a little noise at the low end, but overall the bias appears non-existent across the range of signal.
+There seems to be a little noise at the low end, but overall the bias appears non-existent across the range of signal.
+Now we can move to the final results after merging neighbouring windows.
 Unlike differential gene-expression analysis, we have a much greater range of information we can add to figures like this, so let's create an MA plot showing:
 
 - Results by genomic region
@@ -1158,7 +1164,7 @@ both_mapped_status %>%
   pander(justify = "lrrl")
 ```
 
-As we can see, *FLNB* and *PDZD2* map the same ER peak to two H3K27ac regions, suggesting these may accour in a valley between two H3K27ac peaks.
+As we can see, *FLNB* and *PDZD2* map the same ER peak to two H3K27ac regions, suggesting these may occur in a valley between two H3K27ac peaks.
 We may wish to revisit merging windows to combine these H3K27ac windows.
 In contrast, *DLG5* shows two different ER peaks mapped to a larger H3K27ac range, suggesting two increased binding sites within a larger H3K27ac range.
 
@@ -1208,7 +1214,7 @@ plotHFGC(
 )
 ```
 
-We won't be including anh HiC Interactions, but now we have the "FG" already provided for the HFGC track order.
+We won't be including any HiC Interactions, but now we have the "FG" already provided for the HFGC track order.
 The coverage, is the most important as that will show our ChIP peaks.
 For this, we'll need a BigWigFileList for each ChIP target, which have been prepared before this session.
 Given we have two targets, we'll overlay both treatment groups within the same target on the same track.

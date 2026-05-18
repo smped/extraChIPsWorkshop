@@ -1,7 +1,7 @@
 # extraChIPs Workshop
 
-This package is taken from the template for building a Bioconductor workshop. The package
-includes Github actions to:
+This package is taken from the template for building a Bioconductor workshop. 
+The package includes Github actions to:
 
 1. Set up bioconductor/bioconductor_docker:devel on Github resources
 2. Install package dependencies for your package (based on the `DESCRIPTION` file)
