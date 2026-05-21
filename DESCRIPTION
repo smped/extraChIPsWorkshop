@@ -8,33 +8,26 @@ Authors@R:
            email = "stephen.pederson.au@gmail.com",
            comment = c(ORCID = "0000-0001-8197-3303"))
 Description: This package serves as a the primary material for the Biocondcutor 
-    Workshop featuring th package extraChIPs
+    Workshop demonstrating the package extraChIPs
 License: MIT + file LICENSE
 Encoding: UTF-8
 LazyData: true
 Roxygen: list(markdown = TRUE)
 Depends: 
-    extraChIPs
-Suggests: 
     apeglm,
     Biobase,
-    BiocStyle,
-    BiocFileCache,
     BiocParallel,
     csaw,
     DFplyr,
-    ggforce,
-    glue,
+    extraChIPs,
     Gviz,
+    glue,
+    ggforce,
     harmonicmeanp,
-    knitr,
-    otelsdk,
     pander,
-    pkgdown,
     plyranges,
     qsmooth,
     quantro,
-    rmarkdown,
     Rsamtools,
     rtracklayer,
     scales,
@@ -42,6 +35,13 @@ Suggests:
     tidyverse,
     VennDiagram,
     viridisLite
+Suggests: 
+    BiocStyle,
+    BiocFileCache,
+    knitr,
+    otelsdk,
+    pkgdown,
+    rmarkdown
 URL: https://smped.github.io/extraChIPsWorkshop/
 BugReports: https://github.com/smped/extraChIPsWorkshop/issues/new/choose
 VignetteBuilder: knitr
