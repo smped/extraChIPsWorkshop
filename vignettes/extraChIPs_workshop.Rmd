@@ -737,7 +737,7 @@ f <- paste("H3K27ac", c("E2", "E2DHT"), "merged_peaks.narrowPeak.gz", sep = "_")
 h3k27ac_peaks <- system.file("extdata/peaks", f, package = "extraChIPsWorkshop") |>
   importPeaks(
     seqinfo = sq, blacklist = exclude_ranges, 
-    glueNames = "{basename(x) |> str_remove('_merged.narrowPeak') |> str_remove('H3K27ac_')}"
+    glueNames = "{basename(x) |> str_remove('_merged.+') |> str_remove('H3K27ac_')}"
   )
 ```
 
